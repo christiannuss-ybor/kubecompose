@@ -1,0 +1,43 @@
+[Unit]
+Description=Docker Application Container Engine
+Documentation=https://docs.docker.com
+After=network-online.target nss-lookup.target docker.socket firewalld.service containerd.service time-set.target
+Wants=network-online.target containerd.service
+Requires=docker.socket
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+[Service]
+Type=notify
+Restart=always
+
+# ExecStart cleared then redefined. NOTE (byo-kubelet): the upstream minikube line also had
+#   -H tcp://0.0.0.0:2376 --tlsverify --tlscacert/--tlscert/--tlskey /etc/docker/*.pem
+# That tcp+TLS listener is only for minikube's host->node docker API; the certs are minted by
+# `minikube start` and absent on a fresh kicbase, so dockerd died ("open /etc/docker/server.pem:
+# no such file or directory"). We don't need it: kubelet -> cri-dockerd -> dockerd all ride unix
+# sockets. Dropped tcp+TLS; kept fd:// (docker.socket), unix sock, containerd, insecure-registry.
+ExecStart=
+ExecStart=/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock -H unix:///var/run/docker.sock --default-ulimit=nofile=1048576:1048576 --label provider=docker --insecure-registry 10.96.0.0/12
+ExecReload=/bin/kill -s HUP $MAINPID
+
+# Having non-zero Limit*s causes performance problems due to accounting overhead
+# in the kernel. We recommend using cgroups to do container-local accounting.
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitCORE=infinity
+
+# Uncomment TasksMax if your systemd version supports it.
+# Only systemd 226 and above support this version.
+TasksMax=infinity
+TimeoutStartSec=0
+
+# set delegate yes so that systemd does not reset the cgroups of docker containers
+Delegate=yes
+
+# kill only the docker process, not all processes in the cgroup
+KillMode=process
+OOMScoreAdjust=-500
+
+[Install]
+WantedBy=multi-user.target

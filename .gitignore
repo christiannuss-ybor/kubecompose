@@ -1,0 +1,32 @@
+# ── Cluster credentials — never committed (org security hard rule) ───────────
+# kind/minikube mint a fresh PKI per cluster. Private keys, key-embedding
+# kubeconfigs, and static bearer tokens are excluded from the remote. Public
+# certs (*.crt, *.pub) and non-secret config are kept so the structure is legible;
+# regenerate the private material by scooping from a fresh cluster (see README).
+
+# Every private key, anywhere
+**/*.key
+
+# Rotated kubelet client bundles embed a PRIVATE KEY block
+**/kubelet-client-*.pem
+
+# Static bearer tokens (kind ABAC / kindnet)
+kind/etc-kubernetes/pki/kindnet-token.csv
+kind/etc-kubernetes/pki/kindnet-sa-token
+
+# Kubeconfigs embed client-key-data (a private key)
+kind/etc-kubernetes/admin.conf
+kind/etc-kubernetes/super-admin.conf
+kind/etc-kubernetes/kubelet.conf
+kind/etc-kubernetes/controller-manager.conf
+kind/etc-kubernetes/scheduler.conf
+minikube/etc-kubernetes/admin.conf
+minikube/etc-kubernetes/super-admin.conf
+minikube/etc-kubernetes/kubelet.conf
+minikube/etc-kubernetes/controller-manager.conf
+minikube/etc-kubernetes/scheduler.conf
+minikube/kubeconfig
+minikube/var-lib-minikube/kubeconfig
+
+# macOS
+.DS_Store

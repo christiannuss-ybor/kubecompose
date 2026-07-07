@@ -1,0 +1,22 @@
+# Runs once per boot inside the node, after kubelet brings the API up, and applies what a
+# fresh (tmpfs) etcd lacks: cilium, coredns, storage, cluster-admin RBAC. Logic is inline
+# (no helper script), like kind. Idempotent — kubectl apply re-runs safely.
+# systemd expands $VAR/$(...) in Exec= lines before bash sees them, so keep the commands
+# $-free: hardcode the kubectl path (kicbase puts it under /var/lib/minikube/binaries, not on
+# PATH) and use a $-free `until` loop. KUBECONFIG rides in via Environment= (process env, not
+# a $-expansion). super-admin.conf (O=system:masters) works before any RBAC binding exists.
+[Unit]
+Description=Apply byo-kubelet addons once the apiserver is up
+After=kubelet.service
+Wants=kubelet.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=600
+Environment=KUBECONFIG=/etc/kubernetes/super-admin.conf
+ExecStartPre=/bin/bash -c 'until /var/lib/minikube/binaries/v1.35.1/kubectl get --raw=/healthz >/dev/null 2>&1; do echo "[addons] waiting for apiserver..."; sleep 2; done'
+ExecStart=/bin/bash -c 'echo "[addons] applying /addons" && /var/lib/minikube/binaries/v1.35.1/kubectl apply -f /addons/ && echo "[addons] done"'
+
+[Install]
+WantedBy=multi-user.target

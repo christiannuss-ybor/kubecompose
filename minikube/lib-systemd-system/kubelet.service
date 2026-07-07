@@ -1,0 +1,13 @@
+[Unit]
+Description=kubelet: The Kubernetes Node Agent
+Documentation=http://kubernetes.io/docs/
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/var/lib/minikube/binaries/v1.35.1/kubelet
+Restart=always
+# Tuned for local dev: faster than upstream default (10s), but slower than systemd default (100ms)
+RestartSec=600ms
+
+[Install]
+WantedBy=multi-user.target

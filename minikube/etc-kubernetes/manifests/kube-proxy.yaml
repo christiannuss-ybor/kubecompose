@@ -1,0 +1,63 @@
+# kube-proxy as a static pod (converted from minikube's kube-proxy DaemonSet).
+# Runs off the kubelet static-pod path like the control plane, so no DaemonSet/RBAC/SA to
+# apply — it authenticates as super-admin.conf (O=system:masters) instead of the kube-proxy
+# ServiceAccount token the DaemonSet used. config.conf + super-admin.conf are hostPath-mounted
+# from /etc/kubernetes (bind-mounted from ./etc-kubernetes).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kube-proxy
+  namespace: kube-system
+  labels:
+    k8s-app: kube-proxy
+    tier: node
+spec:
+  priorityClassName: system-node-critical
+  hostNetwork: true
+  nodeName: minikube
+  tolerations:
+    - operator: Exists
+  containers:
+    - name: kube-proxy
+      image: registry.k8s.io/kube-proxy:v1.35.1
+      imagePullPolicy: IfNotPresent
+      command:
+        - /usr/local/bin/kube-proxy
+        - --config=/var/lib/kube-proxy/config.conf
+        - --hostname-override=$(NODE_NAME)
+      env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: kube-proxy-config
+          mountPath: /var/lib/kube-proxy/config.conf
+          readOnly: true
+        - name: kubeconfig
+          mountPath: /etc/kubernetes/super-admin.conf
+          readOnly: true
+        - name: xtables-lock
+          mountPath: /run/xtables.lock
+        - name: lib-modules
+          mountPath: /lib/modules
+          readOnly: true
+  volumes:
+    - name: kube-proxy-config
+      hostPath:
+        path: /etc/kubernetes/kube-proxy/config.conf
+        type: File
+    - name: kubeconfig
+      hostPath:
+        path: /etc/kubernetes/super-admin.conf
+        type: File
+    - name: xtables-lock
+      hostPath:
+        path: /run/xtables.lock
+        type: FileOrCreate
+    - name: lib-modules
+      hostPath:
+        path: /lib/modules
+        type: ""
