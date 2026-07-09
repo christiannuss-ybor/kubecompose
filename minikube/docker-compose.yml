@@ -107,6 +107,47 @@ services:
       minikube:
         ipv4_address: 192.168.49.3
 
+  minikube-m03:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: kubelet
+    image: kubecompose/minikube-kubelet:v1.35.1
+    container_name: minikube-m03
+    hostname: minikube-m03
+    privileged: true
+    restart: "no"
+    tty: true
+    stop_signal: SIGRTMIN+3
+    stop_grace_period: 1s
+    cgroup: private
+    cpus: 2
+    mem_limit: 4194304000
+    memswap_limit: 4194304000
+    shm_size: 67108864
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+      - label=disable
+    tmpfs:
+      - /run
+      - /tmp
+    extra_hosts:
+      - "control-plane.minikube.internal:192.168.49.2"
+    environment:
+      container: docker
+    depends_on:
+      - minikube
+    volumes:
+      - containerd-m03:/var/lib/containerd
+      - dockerd-m03:/var/lib/docker
+      - kubelet-m03:/var/lib/kubelet
+      - varlog-m03:/var/log
+      - /lib/modules:/lib/modules:ro
+    networks:
+      minikube:
+        ipv4_address: 192.168.49.4
+
 networks:
   minikube:
     name: minikube
@@ -130,3 +171,7 @@ volumes:
   dockerd-m02:
   kubelet-m02:
   varlog-m02:
+  containerd-m03:
+  dockerd-m03:
+  kubelet-m03:
+  varlog-m03:
