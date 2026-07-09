@@ -1,13 +1,16 @@
 # Kubeadm-less minikube-equivalent, reverse-engineered from a `minikube start --driver=docker
 # --cni=cilium` node (originally docker inspect e0c9f39c448f). kicbase runs systemd (/sbin/init)
-# as PID 1; the whole cluster comes up from mounted static-pod manifests + systemd units +
-# an addon-apply oneshot — no kubeadm. Source of truth lives in this directory.
+# as PID 1; the whole cluster comes up from static-pod manifests + systemd units + an addon-apply
+# oneshot — no kubeadm. Source of truth lives in this directory and is baked into the image by
+# ./Dockerfile (COPY). Compose supplies only mutable runtime state (volumes, tmpfs) + the network.
 services:
   minikube:
-    image: gcr.io/k8s-minikube/kicbase:v0.0.50@sha256:eb4fec00e8ad70adf8e6436f195cc429825ffb85f95afcdb5d8d9deb576f3e93
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kubecompose/minikube:v1.35.1
     container_name: minikube
     hostname: minikube
-    entrypoint: ["/usr/local/bin/entrypoint", "/sbin/init"]
     privileged: true
     restart: "no"
     tty: true                       # Config.Tty=true
@@ -41,46 +44,15 @@ services:
       name.minikube.sigs.k8s.io: minikube
       role.minikube.sigs.k8s.io: ""
     volumes:
-      # --- surgical named volumes (was blanket `minikube:/var`) ---
-      # Inner runtime needs a real fs here (overlayfs-on-overlayfs breaks containerd/docker);
-      # empty named volumes seed from the kicbase image on first `up`, so the baked control-plane
-      # images survive. docker 29 uses the containerd snapshotter => images live in containerd.
+      # Source files are baked into the image (see ./Dockerfile). Only mutable runtime state
+      # lives here. Surgical named volumes (was blanket `minikube:/var`): the inner runtime
+      # needs a real fs (overlayfs-on-overlayfs breaks containerd/docker); empty named volumes
+      # seed from the image on first `up`, so baked images (+ kubelet config/pki) survive.
       - containerd:/var/lib/containerd   # image store (containerd snapshotter) — the big one
       - dockerd:/var/lib/docker          # docker metadata / volumes / network state
-      - kubelet:/var/lib/kubelet         # kubelet runtime state (pods, plugins, device-plugins)
+      - kubelet:/var/lib/kubelet         # kubelet runtime state (seeded with baked config.yaml + pki)
       - varlog:/var/log
-      - /lib/modules:/lib/modules:ro
-
-      # --- systemd units: our copies are source of truth (:ro, immutable) ---
-      # runtime chain: containerd -> docker(.socket/.service) -> cri-docker(.socket/.service) -> kubelet
-      - ./lib-systemd-system/containerd.service:/lib/systemd/system/containerd.service:ro
-      - ./lib-systemd-system/docker.service:/lib/systemd/system/docker.service:ro
-      - ./lib-systemd-system/docker.socket:/lib/systemd/system/docker.socket:ro
-      - ./lib-systemd-system/cri-docker.service:/lib/systemd/system/cri-docker.service:ro
-      - ./lib-systemd-system/cri-docker.socket:/lib/systemd/system/cri-docker.socket:ro
-      - ./lib-systemd-system/kubelet.service:/lib/systemd/system/kubelet.service:ro
-      - ./etc-systemd-system/kubelet.service.d/10-kubeadm.conf:/etc/systemd/system/kubelet.service.d/10-kubeadm.conf:ro
-      - ./etc-systemd-system/cri-docker.service.d/10-cni.conf:/etc/systemd/system/cri-docker.service.d/10-cni.conf:ro
-
-      # --- unit enablement (kicbase ships kubelet + cri-docker disabled; minikube enables them
-      #     imperatively at `minikube start`. We enable declaratively — systemd honors symlinks
-      #     in *.target.wants/, and symlinks inside a bind-mounted DIR are preserved). ---
-      - ./systemd-wants/multi-user.target.wants:/etc/systemd/system/multi-user.target.wants:ro
-      - ./systemd-wants/sockets.target.wants:/etc/systemd/system/sockets.target.wants:ro
-
-      # --- addon apply (replaces minikube's imperative post-init apply) ---
-      - ./etc-systemd-system/apply-addons.service:/etc/systemd/system/apply-addons.service:ro
-      - ./addons:/addons:ro
-
-      # --- control-plane config + PKI (rw) ---
-      - ./etc-kubernetes:/etc/kubernetes
-      - ./var-lib-minikube/certs:/var/lib/minikube/certs
-      - ./var-lib-minikube/binaries:/var/lib/minikube/binaries   # kubelet/kubeadm/kubectl (kicbase ships none)
-      - ./var-lib-minikube/kubeconfig:/var/lib/minikube/kubeconfig
-
-      # --- kubelet bring-up files (rw) ---
-      - ./var-lib-kubelet/config.yaml:/var/lib/kubelet/config.yaml
-      - ./var-lib-kubelet/pki:/var/lib/kubelet/pki
+      - /lib/modules:/lib/modules:ro     # host kernel modules (only non-baked mount)
     # apiserver only, pinned to a stable host port so a committed kubeconfig always works.
     # minikube also published 22/2376/5000/32443 for its host->node docker API + registry;
     # we drive the cluster from inside the container, so drop them.
