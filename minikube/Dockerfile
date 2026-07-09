@@ -45,8 +45,15 @@ COPY etc-systemd-system/ /etc/systemd/system/
 COPY systemd-wants/multi-user.target.wants/ /etc/systemd/system/multi-user.target.wants/
 COPY systemd-wants/sockets.target.wants/ /etc/systemd/system/sockets.target.wants/
 
-# --- addons applied once by apply-addons.service (cilium, coredns, storage, cluster-admin RBAC) ---
+# --- addons applied once by apply-addons.service (cilium, coredns, storage, cluster-admin RBAC,
+#     prometheus) ---
 COPY addons/ /addons/
+
+# kicbase ships a leftover podman bridge CNI conf. cri-dockerd picks the alphabetically-first
+# conflist, so early pods (coredns, prometheus) raced onto the 10.88.0.0/16 podman bridge before
+# cilium wrote 05-cilium.conflist. Remove it: with no CNI present, pods correctly stay Pending
+# until cilium is ready — dependency ordering instead of a wrong-network race.
+RUN rm /etc/cni/net.d/87-podman-bridge.conflist
 
 # kicbase's own entrypoint runs systemd (/sbin/init) as PID 1 — unchanged.
 ENTRYPOINT ["/usr/local/bin/entrypoint", "/sbin/init"]
