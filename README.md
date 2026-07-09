@@ -1,90 +1,73 @@
 # kubecompose
 
-Local Kubernetes clusters — kind and minikube — **reverse-engineered into plain
-`docker compose`**, with no `kubeadm` in the boot path.
+A local Kubernetes cluster — minikube's docker-driver node — **reverse-engineered
+into plain `docker compose`**, with no `kubeadm` and no `minikube` in the boot path.
 
-Both tools normally run `kubeadm init` inside a node container to bootstrap the
-control plane. kubecompose throws that away: the node image runs `systemd`, and
-the entire cluster comes up from **static-pod manifests + systemd units + one
-addon-apply oneshot**, all mounted from this repo. `docker compose up` is the
-only command. Tear it down and the next `up` is a brand-new cluster (etcd lives
-on tmpfs).
+`minikube start` normally runs kubeadm inside a node container to bootstrap the
+control plane, then applies workloads imperatively. kubecompose throws that away:
+a Dockerfile bakes everything the tool would mint (static-pod manifests, generated
+PKI, kubeconfigs, systemd units, addons) into the node image, and `docker compose
+up` is the only command. Tear it down and the next `up` is a brand-new cluster
+(etcd lives on tmpfs, CAs are re-minted every image build).
 
-It's a teardown of how these clusters actually work — every cert, kubeconfig,
-manifest, systemd unit, and volume the tools mint, laid out on disk and wired up
-by hand.
+It started as a teardown of how these clusters actually work — every cert,
+kubeconfig, manifest, systemd unit, and volume laid out on disk and wired up by
+hand. (A kind variant lived here too; see git history.)
 
 ## Layout
 
 ```
-kind/         kind v0.31 (k8s 1.35, containerd) reverse-engineered
-minikube/     minikube v1.38 (k8s 1.35, docker driver, cilium CNI) reverse-engineered
-Makefile      make kind | make minikube | make clean
+minikube/
+  Dockerfile            FROM kicbase: COPYs everything below, downloads kubelet/kubectl
+                        from dl.k8s.io (checksum-verified), runs gen-pki.sh
+  gen-pki.sh            generates all CAs, certs, and kubeconfigs at image build
+  docker-compose.yml    the node service: runtime volumes, tmpfs etcd, network, port 8443
+  etc-kubernetes/       static-pod manifests (etcd, apiserver, cm, scheduler, kube-proxy)
+  lib-systemd-system/   runtime-chain units: containerd -> dockerd -> cri-dockerd -> kubelet
+  etc-systemd-system/   drop-ins + the apply-addons oneshot
+  systemd-wants/        .target.wants/ enablement symlinks
+  addons/               applied once per boot: cilium, coredns, storage, RBAC,
+                        prometheus + node-exporter
+  var-lib-kubelet/      kubelet config
+Makefile                make minikube | make clean
 ```
-
-Each stack directory holds:
-
-| Path | What it is |
-|------|-----------|
-| `docker-compose.yml` | the single node service — a 1:1 distillation of the container the tool created (image, privileged, cgroups, tmpfs, network, volumes) |
-| `etc-kubernetes/` | control-plane source of truth: static-pod `manifests/`, kubeconfigs, `addons/` |
-| `lib-systemd-system/`, `etc-systemd-system/` | the systemd units that bring up the runtime + kubelet, mounted `:ro` so this repo is authoritative |
-| `systemd-wants/` | `.target.wants/` enablement symlinks (mounted as a dir so systemd honors them) |
-| `addons/` | what a fresh etcd lacks — CNI, coredns, storage, RBAC — applied once by `apply-addons.service` |
-| `var-lib-*` | kubelet config + PKI + (minikube) the downloaded k8s binaries |
 
 ## Usage
 
 ```sh
-make kind        # docker compose up the kind stack
-make minikube    # docker compose up the minikube stack
-make clean       # down -v --remove-orphans both (containers, networks, volumes)
+make minikube    # build the node image + docker compose up + extract kubeconfig
+make clean       # down -v --remove-orphans (containers, network, volumes)
+
+kubectl --kubeconfig=minikube/kubeconfig get pods -A   # host access via 127.0.0.1:8443
+kubectl --kubeconfig=minikube/kubeconfig -n monitoring port-forward svc/prometheus 9090
 ```
 
-`kubectl` against a running stack:
+## How it boots (no kubeadm, no minikube)
 
-```sh
-# minikube publishes the apiserver on a stable 127.0.0.1:8443
-kubectl --kubeconfig=minikube/kubeconfig get pods -A
-
-# or from inside either node
-docker exec kind  env KUBECONFIG=/etc/kubernetes/admin.conf kubectl get pods -A
-docker exec minikube env KUBECONFIG=/etc/kubernetes/admin.conf \
-  /var/lib/minikube/binaries/v1.35.1/kubectl get pods -A
-```
-
-## How each stack boots (no kubeadm)
-
-- **Runtime** — `kind` runs `containerd` directly; `minikube` runs the
-  `containerd → dockerd → cri-dockerd → kubelet` chain (docker driver). All are
-  systemd units mounted from this repo.
-- **Control plane** — etcd, apiserver, controller-manager, scheduler are static
-  pods in `etc-kubernetes/manifests/`, launched by kubelet off mounted certs.
-- **Networking** — `kind` uses kindnet (converted to a static pod); `minikube`
-  uses **cilium** (kept as an addon: 2 DaemonSets + operator + CRDs). Both keep
-  `kube-proxy` as a **static pod**.
-- **Addons** — a fresh (tmpfs) etcd has none of the workloads or RBAC that
-  `kubeadm`/the tool would have created. `apply-addons.service` waits for
-  `/healthz`, then `kubectl apply -f /addons/` (as `super-admin.conf`, which is
-  `system:masters` and works before any RBAC binding exists). `addons/` also
-  ships the `kubeadm:cluster-admins` binding so `admin.conf` works too.
-- **Ephemeral etcd** — etcd's data dir is a `tmpfs` mount, so every `up` is a
-  clean cluster.
+- **Runtime chain** — systemd (PID 1) starts `containerd → dockerd → cri-dockerd →
+  kubelet`, all units + enablement symlinks baked from this repo. kicbase ships
+  kubelet/cri-docker disabled; minikube enables them imperatively — we bake the
+  `.wants/` symlinks instead.
+- **Control plane** — etcd, apiserver, controller-manager, scheduler, and
+  kube-proxy are static pods in `etc-kubernetes/manifests/`, launched by kubelet
+  off build-generated certs. etcd's data dir is tmpfs: every `up` is a clean DB.
+- **Addons** — a fresh etcd has none of the workloads or RBAC kubeadm/minikube
+  would have created. `apply-addons.service` waits for `/healthz` then
+  `kubectl apply -f /addons/` as super-admin (`system:masters`, works before any
+  RBAC exists), restoring cilium (CNI), coredns, storage, the
+  `kubeadm:cluster-admins` binding, and prometheus + node-exporter.
+- **CNI ordering** — the Dockerfile deletes kicbase's leftover podman bridge CNI
+  conf, so early pods stay Pending until cilium is ready instead of racing onto
+  the wrong network.
+- **Monitoring** — prometheus scrapes only cluster-DNS names (coredns, the
+  apiserver via SA token + generated CA, kubelet, node-exporter), so a green
+  target page proves DNS, service routing, and the auth chain every boot.
 
 ## Credentials / PKI
 
-**minikube: generated at image build.** `minikube/gen-pki.sh` (run by the
-Dockerfile) mints the full PKI — minikubeCA / front-proxy-ca / etcd-ca, every
-leaf cert with the same subjects/SANs/EKUs `minikube start` would produce, the
-ServiceAccount keypair, and all kubeconfigs. No secret material exists in the
-repo, and every rebuild is a key rotation. Keys live only in the local image —
-don't push the image to a registry. `make minikube` extracts the host-access
-kubeconfig from the image to `minikube/kubeconfig` (gitignored).
-
-**kind: still scooped.** The kind stack predates the build-time generator and
-boots from PKI copied out of a real kind node (`docker cp` from a throwaway
-`kind create cluster`). Converting it to the same Dockerfile + gen-pki pattern
-is the obvious next step.
-
-The per-file map of what lives where is in each stack's `docker-compose.yml`
-and `minikube/Dockerfile`.
+Generated at image build by `minikube/gen-pki.sh` — minikubeCA / front-proxy-ca /
+etcd-ca, every leaf cert with the same subjects/SANs/EKUs `minikube start` would
+produce, the ServiceAccount keypair, and all kubeconfigs. **No secret material
+exists in the repo**, and every rebuild is a key rotation. Keys live only in the
+local image — don't push the image to a registry. `make minikube` extracts the
+host-access kubeconfig to `minikube/kubeconfig` (gitignored).
