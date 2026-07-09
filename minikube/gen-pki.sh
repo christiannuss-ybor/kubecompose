@@ -79,6 +79,16 @@ leaf "$TMP/admin"              "/O=kubeadm:cluster-admins/CN=kubernetes-admin"  
 leaf "$TMP/super-admin"        "/O=system:masters/CN=kubernetes-super-admin"       "$C/ca" "clientAuth"
 leaf "$TMP/controller-manager" "/CN=system:kube-controller-manager"                "$C/ca" "clientAuth"
 leaf "$TMP/scheduler"          "/CN=system:kube-scheduler"                         "$C/ca" "clientAuth"
+# kube-proxy runs as a static pod on EVERY node (including generic workers), so it gets its
+# own cert bound to the auto-bootstrapped system:node-proxier role via an addon CRB — not
+# super-admin, which must never ship in the worker image.
+leaf "$TMP/kube-proxy"         "/CN=system:kube-proxy"                             "$C/ca" "clientAuth"
+
+# ---- bootstrap token: workers join via standard kubelet TLS bootstrapping. The token
+#      authenticates as system:bootstrappers (apiserver --token-auth-file); addon RBAC lets
+#      that group create CSRs and get them auto-approved; kcm signs with the cluster CA. ----
+BOOTSTRAP_TOKEN="$(openssl rand -hex 3).$(openssl rand -hex 8)"
+printf '%s,kubelet-bootstrap,10001,"system:bootstrappers"\n' "$BOOTSTRAP_TOKEN" > "$C/bootstrap-token.csv"
 
 # kubeconfig <file> <server> <user> <cert> <key> <embed>
 kubeconfig() {
@@ -96,8 +106,16 @@ kubeconfig "$K/super-admin.conf"        "https://control-plane.minikube.internal
 kubeconfig "$K/controller-manager.conf" "https://$NODE_IP:8443"                        system:kube-controller-manager "$TMP/controller-manager.crt" "$TMP/controller-manager.key" true
 kubeconfig "$K/scheduler.conf"          "https://$NODE_IP:8443"                        system:kube-scheduler         "$TMP/scheduler.crt"          "$TMP/scheduler.key"          true
 kubeconfig "$K/kubelet.conf"            "https://$NODE_IP:8443"                        system:node:minikube          "$C/kubelet-client.pem"       "$C/kubelet-client.pem"       false
+kubeconfig "$K/kube-proxy.conf"         "https://control-plane.minikube.internal:8443" system:kube-proxy             "$TMP/kube-proxy.crt"         "$TMP/kube-proxy.key"         true
 # host access via the pinned 127.0.0.1:8443 publish; `make minikube` extracts this file
 kubeconfig /var/lib/minikube/host.kubeconfig "https://127.0.0.1:8443"                  kubernetes-admin              "$TMP/admin.crt"              "$TMP/admin.key"              true
+
+# worker bootstrap kubeconfig: cluster CA + the token — no client cert; the kubelet earns one
+"$KUBECTL" config --kubeconfig="$K/bootstrap-kubelet.conf" set-cluster mk \
+  --server="https://control-plane.minikube.internal:8443" --certificate-authority="$C/ca.crt" --embed-certs=true >/dev/null
+"$KUBECTL" config --kubeconfig="$K/bootstrap-kubelet.conf" set-credentials kubelet-bootstrap --token="$BOOTSTRAP_TOKEN" >/dev/null
+"$KUBECTL" config --kubeconfig="$K/bootstrap-kubelet.conf" set-context kubelet-bootstrap@mk --cluster=mk --user=kubelet-bootstrap >/dev/null
+"$KUBECTL" config --kubeconfig="$K/bootstrap-kubelet.conf" use-context kubelet-bootstrap@mk >/dev/null
 
 rm -f "$C"/*.srl "$C"/etcd/*.srl
 echo "PKI + kubeconfigs generated:"

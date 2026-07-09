@@ -17,6 +17,9 @@ spec:
     - --authorization-mode=Node,RBAC
     - --client-ca-file=/var/lib/minikube/certs/ca.crt
     - --enable-bootstrap-token-auth=true
+    # static bootstrap token minted by gen-pki.sh; workers authenticate as system:bootstrappers
+    # for kubelet TLS bootstrapping (the certs dir is already hostPath-mounted into this pod)
+    - --token-auth-file=/var/lib/minikube/certs/bootstrap-token.csv
     - --etcd-cafile=/var/lib/minikube/certs/etcd/ca.crt
     - --etcd-certfile=/var/lib/minikube/certs/apiserver-etcd-client.crt
     - --etcd-keyfile=/var/lib/minikube/certs/apiserver-etcd-client.key

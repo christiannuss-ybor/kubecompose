@@ -1,8 +1,8 @@
 # kube-proxy as a static pod (converted from minikube's kube-proxy DaemonSet).
-# Runs off the kubelet static-pod path like the control plane, so no DaemonSet/RBAC/SA to
-# apply — it authenticates as super-admin.conf (O=system:masters) instead of the kube-proxy
-# ServiceAccount token the DaemonSet used. config.conf + super-admin.conf are hostPath-mounted
-# from /etc/kubernetes (bind-mounted from ./etc-kubernetes).
+# Baked into the kubelet image stage, so EVERY node — control plane and generic workers —
+# runs it from its static-pod path. Authenticates as CN=system:kube-proxy (dedicated cert
+# kubeconfig from gen-pki.sh) bound to the auto-bootstrapped system:node-proxier role by an
+# addon CRB; expect brief 403 retries on cold boot until apply-addons lands the binding.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -14,7 +14,6 @@ metadata:
 spec:
   priorityClassName: system-node-critical
   hostNetwork: true
-  nodeName: minikube
   tolerations:
     - operator: Exists
   containers:
@@ -37,7 +36,7 @@ spec:
           mountPath: /var/lib/kube-proxy/config.conf
           readOnly: true
         - name: kubeconfig
-          mountPath: /etc/kubernetes/super-admin.conf
+          mountPath: /etc/kubernetes/kube-proxy.conf
           readOnly: true
         - name: xtables-lock
           mountPath: /run/xtables.lock
@@ -51,7 +50,7 @@ spec:
         type: File
     - name: kubeconfig
       hostPath:
-        path: /etc/kubernetes/super-admin.conf
+        path: /etc/kubernetes/kube-proxy.conf
         type: File
     - name: xtables-lock
       hostPath:

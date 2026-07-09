@@ -8,6 +8,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: full
     image: kubecompose/minikube:v1.35.1
     container_name: minikube
     hostname: minikube
@@ -62,6 +63,50 @@ services:
       minikube:
         ipv4_address: 192.168.49.2
 
+  # generic worker node — the `kubelet` image stage. Same base/runtime chain, but no control
+  # plane, no admin credentials, no signing keys: just kubelet (which joins via TLS
+  # bootstrapping) and the kube-proxy static pod. Hostname is its node name; IP auto-detected.
+  minikube-m02:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: kubelet
+    image: kubecompose/minikube-kubelet:v1.35.1
+    container_name: minikube-m02
+    hostname: minikube-m02
+    privileged: true
+    restart: "no"
+    tty: true
+    stop_signal: SIGRTMIN+3
+    stop_grace_period: 1s
+    cgroup: private
+    cpus: 2
+    mem_limit: 4194304000
+    memswap_limit: 4194304000
+    shm_size: 67108864
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+      - label=disable
+    tmpfs:
+      - /run
+      - /tmp
+    extra_hosts:
+      - "control-plane.minikube.internal:192.168.49.2"
+    environment:
+      container: docker
+    depends_on:
+      - minikube
+    volumes:
+      - containerd-m02:/var/lib/containerd
+      - dockerd-m02:/var/lib/docker
+      - kubelet-m02:/var/lib/kubelet
+      - varlog-m02:/var/log
+      - /lib/modules:/lib/modules:ro
+    networks:
+      minikube:
+        ipv4_address: 192.168.49.3
+
 networks:
   minikube:
     name: minikube
@@ -81,3 +126,7 @@ volumes:
   dockerd:
   kubelet:
   varlog:
+  containerd-m02:
+  dockerd-m02:
+  kubelet-m02:
+  varlog-m02:
