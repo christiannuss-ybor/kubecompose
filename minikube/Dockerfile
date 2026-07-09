@@ -4,16 +4,12 @@
 # bind-mounted at runtime. The image is self-contained; docker-compose only supplies mutable
 # runtime state (named volumes for the container runtime + kubelet, tmpfs etcd) and the network.
 #
-# NOTE: the COPY sources include cluster PKI/kubeconfigs that are gitignored (never pushed).
-# They must exist locally at build time — regenerate by scooping a fresh cluster (see README).
+# PKI + kubeconfigs are GENERATED at build by gen-pki.sh (fresh CAs every build) — no secret
+# material exists in the repo. Keys live only in the local image; don't push it to a registry.
 FROM gcr.io/k8s-minikube/kicbase:v0.0.50@sha256:eb4fec00e8ad70adf8e6436f195cc429825ffb85f95afcdb5d8d9deb576f3e93
 
 # --- control-plane config + PKI (static-pod manifests, certs, kubeconfigs, addons dir) ---
 COPY etc-kubernetes/ /etc/kubernetes/
-
-# --- minikube certs + kubeconfig ---
-COPY var-lib-minikube/certs/ /var/lib/minikube/certs/
-COPY var-lib-minikube/kubeconfig /var/lib/minikube/kubeconfig
 
 # --- kubelet + kubectl: kicbase ships no k8s binaries; minikube downloads them at `minikube
 #     start`. We do the same at build time from dl.k8s.io (checksum-verified) instead of
@@ -30,9 +26,15 @@ RUN set -eux; \
       chmod +x "$d/$bin"; \
     done
 
-# --- kubelet bring-up files (seed the /var/lib/kubelet volume) ---
+# --- PKI + kubeconfigs: GENERATED here, never committed. Fresh CAs every build (= rotation).
+#     Writes /var/lib/minikube/certs/**, /etc/kubernetes/*.conf, and host.kubeconfig
+#     (extracted by `make minikube` for host kubectl). ---
+COPY gen-pki.sh /usr/local/bin/gen-pki.sh
+RUN bash /usr/local/bin/gen-pki.sh
+
+# --- kubelet bring-up config (seeds the /var/lib/kubelet volume; kubelet self-generates its
+#     serving cert, and its client cert lives at /var/lib/minikube/certs/kubelet-client.pem) ---
 COPY var-lib-kubelet/config.yaml /var/lib/kubelet/config.yaml
-COPY var-lib-kubelet/pki/ /var/lib/kubelet/pki/
 
 # --- systemd: runtime-chain + kubelet units, their drop-ins, and apply-addons oneshot ---
 COPY lib-systemd-system/ /lib/systemd/system/

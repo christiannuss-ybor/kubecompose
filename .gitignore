@@ -1,2 +1,7 @@
+# Host-access kubeconfig — extracted from the built image by `make minikube`; embeds the
+# per-build admin client key, so it must never be committed (minikube PKI is generated at
+# image build by minikube/gen-pki.sh — no other secret material exists in the tree).
+minikube/kubeconfig
+
 # macOS
 .DS_Store

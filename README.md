@@ -71,24 +71,20 @@ docker exec minikube env KUBECONFIG=/etc/kubernetes/admin.conf \
 - **Ephemeral etcd** — etcd's data dir is a `tmpfs` mount, so every `up` is a
   clean cluster.
 
-## Credentials / PKI (why it won't boot straight from a clone)
+## Credentials / PKI
 
-Cluster **private keys, key-embedding kubeconfigs, and static tokens are not
-committed** (see `.gitignore`) — never push private keys, even to a private repo.
-Public certs and every non-secret file (compose, manifests, systemd units,
-addons, kube-proxy/kubelet config) *are* committed, so the wiring is fully
-legible.
+**minikube: generated at image build.** `minikube/gen-pki.sh` (run by the
+Dockerfile) mints the full PKI — minikubeCA / front-proxy-ca / etcd-ca, every
+leaf cert with the same subjects/SANs/EKUs `minikube start` would produce, the
+ServiceAccount keypair, and all kubeconfigs. No secret material exists in the
+repo, and every rebuild is a key rotation. Keys live only in the local image —
+don't push the image to a registry. `make minikube` extracts the host-access
+kubeconfig from the image to `minikube/kubeconfig` (gitignored).
 
-To make a stack bootable, repopulate the excluded PKI by scooping it from a
-throwaway real cluster — which is exactly how this repo was built:
-
-```sh
-# kind example
-kind create cluster
-docker cp <node>:/etc/kubernetes/pki   kind/etc-kubernetes/pki
-docker cp <node>:/etc/kubernetes/admin.conf kind/etc-kubernetes/admin.conf
-# ...the other kubeconfigs; then `kind delete cluster` and `make kind`
-```
+**kind: still scooped.** The kind stack predates the build-time generator and
+boots from PKI copied out of a real kind node (`docker cp` from a throwaway
+`kind create cluster`). Converting it to the same Dockerfile + gen-pki pattern
+is the obvious next step.
 
 The per-file map of what lives where is in each stack's `docker-compose.yml`
-volume mounts.
+and `minikube/Dockerfile`.
