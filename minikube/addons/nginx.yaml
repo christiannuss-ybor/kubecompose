@@ -1,0 +1,38 @@
+# nginx DaemonSet — one pod per node, gated on coredns. The init container is a single
+# nslookup through the pod's normal cluster DNS (ClusterFirst default — no hostNetwork, so
+# no dnsPolicy override needed); on failure the kubelet restarts it with backoff, so a node
+# whose cluster network can't reach coredns shows Init:Error / Init:CrashLoopBackOff (red in
+# k9s) until the path heals. Init containers check at START time only.
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nginx
+  labels:
+    app: nginx
+spec:
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      initContainers:
+        - name: check-coredns
+          image: busybox:1.36
+          command:
+            - nslookup
+            - kubernetes.default.svc.cluster.local
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              memory: 128Mi

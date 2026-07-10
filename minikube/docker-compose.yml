@@ -147,9 +147,11 @@ services:
       - kubelet-m03:/var/lib/kubelet
       - varlog-m03:/var/log
       - /lib/modules:/lib/modules:ro
+    # EXPERIMENT: m03 lives on a different docker bridge than the rest of the cluster.
+    # Docker isolates bridge networks from each other by default (DOCKER-ISOLATION iptables).
     networks:
-      minikube:
-        ipv4_address: 192.168.49.4
+      minikube2:
+        ipv4_address: 192.168.58.2
 
 networks:
   minikube:
@@ -161,6 +163,18 @@ networks:
       config:
         - subnet: 192.168.49.0/24
           gateway: 192.168.49.1
+    driver_opts:
+      com.docker.network.driver.mtu: "65535"
+      com.docker.network.bridge.enable_ip_masquerade: "true"
+  minikube2:
+    name: minikube2
+    driver: bridge
+    enable_ipv6: false
+    ipam:
+      driver: default
+      config:
+        - subnet: 192.168.58.0/24
+          gateway: 192.168.58.1
     driver_opts:
       com.docker.network.driver.mtu: "65535"
       com.docker.network.bridge.enable_ip_masquerade: "true"
