@@ -1,0 +1,70 @@
+# Cilium BGP Control Plane (BGPv2 CRDs) — each node peers eBGP with the FRR router on its
+# own bridge and advertises its podCIDR. Applied by apply-addons.service with a retry loop,
+# since the cilium operator registers these CRDs some seconds after startup.
+# Note: cilium only ADVERTISES — it does not install routes received from FRR; node-side
+# routes toward FRR are static (node-routes.service), as a real ToR deployment would have.
+---
+apiVersion: cilium.io/v2
+kind: CiliumBGPClusterConfig
+metadata:
+  name: bridge1-nodes
+spec:
+  nodeSelector:
+    matchExpressions:
+      - key: kubernetes.io/hostname
+        operator: In
+        values: ["minikube", "minikube-m02"]
+  bgpInstances:
+    - name: as65001
+      localASN: 65001
+      peers:
+        - name: frr
+          peerASN: 65000
+          peerAddress: 192.168.49.254
+          peerConfigRef:
+            name: frr-peer
+---
+apiVersion: cilium.io/v2
+kind: CiliumBGPClusterConfig
+metadata:
+  name: bridge2-nodes
+spec:
+  nodeSelector:
+    matchExpressions:
+      - key: kubernetes.io/hostname
+        operator: In
+        values: ["minikube-m03"]
+  bgpInstances:
+    - name: as65001
+      localASN: 65001
+      peers:
+        - name: frr
+          peerASN: 65000
+          peerAddress: 192.168.58.254
+          peerConfigRef:
+            name: frr-peer
+---
+apiVersion: cilium.io/v2
+kind: CiliumBGPPeerConfig
+metadata:
+  name: frr-peer
+spec:
+  timers:
+    keepAliveTimeSeconds: 3
+    holdTimeSeconds: 9
+  families:
+    - afi: ipv4
+      safi: unicast
+      advertisements:
+        matchLabels:
+          advertise: pod-cidr
+---
+apiVersion: cilium.io/v2
+kind: CiliumBGPAdvertisement
+metadata:
+  name: pod-cidr
+  labels:
+    advertise: pod-cidr
+spec:
+  advertisements:
+    - advertisementType: PodCIDR

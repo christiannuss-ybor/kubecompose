@@ -19,7 +19,25 @@ spec:
       labels:
         app: nginx
     spec:
+      # for dump-iptables: lets the init container nsenter the node's namespaces via PID 1
+      hostPID: true
       initContainers:
+        # Dumps the NODE's iptables (where cilium's CILIUM_* chains and kube-proxy's
+        # KUBE-* DNAT rules actually live — a pod's own netns is empty) into init logs:
+        #   kubectl logs <pod> -c dump-iptables
+        # nsenter into PID 1's mount+net ns runs the node's own iptables-save. Runs first
+        # and always exits 0, so the dump exists even when check-coredns then goes red.
+        - name: dump-iptables
+          image: busybox:1.36
+          securityContext:
+            privileged: true
+          command:
+            - nsenter
+            - --target=1
+            - --mount
+            - --net
+            - --
+            - iptables-save
         - name: check-coredns
           image: busybox:1.36
           command:

@@ -65,6 +65,10 @@ COPY --from=pki /var/lib/minikube/certs/ca.crt /var/lib/minikube/certs/ca.crt
 COPY --from=pki /etc/kubernetes/bootstrap-kubelet.conf /etc/kubernetes/bootstrap-kubelet.conf
 COPY --from=pki /etc/kubernetes/kube-proxy.conf /etc/kubernetes/kube-proxy.conf
 
+# static routes toward the FRR router (every node; see node-routes.sh header)
+COPY bin/node-routes.sh /usr/local/bin/node-routes.sh
+COPY etc-systemd-system/node-routes.service /etc/systemd/system/node-routes.service
+
 # ---------- full (control plane) ----------
 FROM kubelet AS full
 
@@ -85,6 +89,8 @@ COPY etc-systemd-system/kubelet.service.d/20-control-plane.conf /etc/systemd/sys
 COPY etc-systemd-system/apply-addons.service /etc/systemd/system/apply-addons.service
 RUN ln -s /etc/systemd/system/apply-addons.service /etc/systemd/system/multi-user.target.wants/apply-addons.service
 COPY addons/ /addons/
+# cilium BGP peering CRs — applied with a retry loop (operator registers CRDs late)
+COPY addons-bgp/ /addons-bgp/
 
 # CNI toggle, read at boot by apply-addons.service (via /proc/1/environ — runtime env, not a
 # rebuild). on = cilium; off = kindnet fallback (minimal CNI, cluster stays healthy).

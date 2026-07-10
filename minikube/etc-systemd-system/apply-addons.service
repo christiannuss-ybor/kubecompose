@@ -23,6 +23,9 @@ Environment=KUBECONFIG=/etc/kubernetes/super-admin.conf
 ExecStartPre=/bin/bash -c 'if xargs -0 -n1 </proc/1/environ | grep -qx CILIUM=off; then echo "[addons] CILIUM=off - using kindnet fallback"; rm -f /addons/cilium.yaml; else rm -f /addons/kindnet-fallback.yaml; fi'
 ExecStartPre=/bin/bash -c 'until /var/lib/minikube/binaries/v1.35.1/kubectl get --raw=/healthz >/dev/null 2>&1; do echo "[addons] waiting for apiserver..."; sleep 2; done'
 ExecStart=/bin/bash -c 'echo "[addons] applying /addons" && /var/lib/minikube/binaries/v1.35.1/kubectl apply -f /addons/ && echo "[addons] done"'
+# BGP peering CRs live in their own dir with a retry loop: the cilium operator registers the
+# BGPv2 CRDs some seconds after it starts, so the first applies can fail on unknown kinds.
+ExecStart=/bin/bash -c 'until /var/lib/minikube/binaries/v1.35.1/kubectl apply -f /addons-bgp/ >/dev/null 2>&1; do echo "[addons] waiting for cilium BGP CRDs..."; sleep 5; done; echo "[addons] BGP peering applied"'
 
 [Install]
 WantedBy=multi-user.target

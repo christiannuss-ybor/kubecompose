@@ -153,6 +153,30 @@ services:
       minikube2:
         ipv4_address: 192.168.58.2
 
+  # the "top-of-rack router": FRR, dual-homed on BOTH bridges. Nodes eBGP-peer with it
+  # (cilium BGP control plane) and route pod + foreign-node-subnet traffic through it —
+  # every hop is intra-bridge, so docker's inter-bridge isolation never applies.
+  frr:
+    image: quay.io/frrouting/frr:10.2.1
+    container_name: frr
+    hostname: frr
+    restart: "no"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - NET_BIND_SERVICE
+      - SYS_ADMIN
+    sysctls:
+      net.ipv4.ip_forward: 1
+    volumes:
+      - ./frr/daemons:/etc/frr/daemons:ro
+      - ./frr/frr.conf:/etc/frr/frr.conf
+    networks:
+      minikube:
+        ipv4_address: 192.168.49.254
+      minikube2:
+        ipv4_address: 192.168.58.254
+
 networks:
   minikube:
     name: minikube

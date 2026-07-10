@@ -552,7 +552,13 @@ data:
   proxy-xff-num-trusted-hops-egress: "0"
   proxy-xff-num-trusted-hops-ingress: "0"
   remove-cilium-node-taints: "true"
-  routing-mode: tunnel
+  # byo-kubelet Avenue B: native routing + BGP instead of vxlan. Nodes advertise their
+  # podCIDRs to the dual-homed FRR router (see ../frr/ and ../addons-bgp/); pod traffic is
+  # plainly routed via FRR, whose intra-bridge hops sidestep docker's inter-bridge isolation.
+  # native-routing-cidr exempts pod<->pod traffic from masquerade.
+  routing-mode: native
+  ipv4-native-routing-cidr: 10.244.0.0/16
+  enable-bgp-control-plane: "true"
   service-no-backend-response: reject
   set-cilium-is-up-condition: "true"
   set-cilium-node-taints: "true"
