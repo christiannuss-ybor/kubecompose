@@ -39,6 +39,9 @@ services:
       - "control-plane.minikube.internal:192.168.49.2"
     environment:
       container: docker
+      # cilium on/off toggle, consumed by apply-addons.service (default on; see Dockerfile).
+      # Usage: CILIUM=off make minikube
+      CILIUM: ${CILIUM:-on}
     labels:
       created_by.minikube.sigs.k8s.io: "true"
       mode.minikube.sigs.k8s.io: minikube

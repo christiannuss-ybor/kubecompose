@@ -85,3 +85,8 @@ COPY etc-systemd-system/kubelet.service.d/20-control-plane.conf /etc/systemd/sys
 COPY etc-systemd-system/apply-addons.service /etc/systemd/system/apply-addons.service
 RUN ln -s /etc/systemd/system/apply-addons.service /etc/systemd/system/multi-user.target.wants/apply-addons.service
 COPY addons/ /addons/
+
+# CNI toggle, read at boot by apply-addons.service (via /proc/1/environ — runtime env, not a
+# rebuild). on = cilium; off = kindnet fallback (minimal CNI, cluster stays healthy).
+# Override per run: `CILIUM=off make minikube`, or set it in minikube/.env.
+ENV CILIUM=on

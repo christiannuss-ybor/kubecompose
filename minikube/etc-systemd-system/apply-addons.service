@@ -15,6 +15,12 @@ Type=oneshot
 RemainAfterExit=yes
 TimeoutStartSec=600
 Environment=KUBECONFIG=/etc/kubernetes/super-admin.conf
+# CILIUM toggle (default on; see Dockerfile ENV). The container's env lands on PID 1, so read
+# it from /proc/1/environ (xargs -0 splits the NUL-separated entries; keeps this line $-free —
+# systemd does not propagate container env to units). Exactly one CNI survives into the apply
+# set: CILIUM=on => cilium; CILIUM=off => kindnet fallback (keeps nodes Ready — kubelet gates
+# the Ready condition on a CNI conf existing in /etc/cni/net.d).
+ExecStartPre=/bin/bash -c 'if xargs -0 -n1 </proc/1/environ | grep -qx CILIUM=off; then echo "[addons] CILIUM=off - using kindnet fallback"; rm -f /addons/cilium.yaml; else rm -f /addons/kindnet-fallback.yaml; fi'
 ExecStartPre=/bin/bash -c 'until /var/lib/minikube/binaries/v1.35.1/kubectl get --raw=/healthz >/dev/null 2>&1; do echo "[addons] waiting for apiserver..."; sleep 2; done'
 ExecStart=/bin/bash -c 'echo "[addons] applying /addons" && /var/lib/minikube/binaries/v1.35.1/kubectl apply -f /addons/ && echo "[addons] done"'
 

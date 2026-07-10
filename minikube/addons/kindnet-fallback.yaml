@@ -1,0 +1,104 @@
+# kindnet — minimal fallback CNI, applied INSTEAD of cilium when CILIUM=off (see
+# apply-addons.service; exactly one of cilium.yaml / kindnet-fallback.yaml survives into the
+# apply set). kind's default CNI: a tiny DaemonSet that reads each node's podCIDR from the
+# API and writes /etc/cni/net.d/10-kindnet.conflist (ptp + host-local) itself, so it needs
+# no per-node configuration and keeps the cluster healthy without cilium.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kindnet
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kindnet
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes/status"]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kindnet
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kindnet
+subjects:
+  - kind: ServiceAccount
+    name: kindnet
+    namespace: kube-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kindnet
+  namespace: kube-system
+  labels:
+    app: kindnet
+    k8s-app: kindnet
+spec:
+  selector:
+    matchLabels:
+      app: kindnet
+  template:
+    metadata:
+      labels:
+        app: kindnet
+        k8s-app: kindnet
+    spec:
+      hostNetwork: true
+      serviceAccountName: kindnet
+      priorityClassName: system-node-critical
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: kindnet-cni
+          image: docker.io/kindest/kindnetd:v20251212-v0.29.0-alpha-105-g20ccfc88
+          env:
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: POD_SUBNET
+              value: 10.244.0.0/16
+          resources:
+            requests:
+              cpu: 100m
+              memory: 50Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            privileged: false
+            capabilities:
+              add: ["NET_RAW", "NET_ADMIN"]
+          volumeMounts:
+            - name: cni-cfg
+              mountPath: /etc/cni/net.d
+            - name: xtables-lock
+              mountPath: /run/xtables.lock
+            - name: lib-modules
+              mountPath: /lib/modules
+              readOnly: true
+      volumes:
+        - name: cni-cfg
+          hostPath:
+            path: /etc/cni/net.d
+            type: DirectoryOrCreate
+        - name: xtables-lock
+          hostPath:
+            path: /run/xtables.lock
+            type: FileOrCreate
+        - name: lib-modules
+          hostPath:
+            path: /lib/modules
