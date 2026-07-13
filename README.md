@@ -18,10 +18,10 @@ history.)
 ## Topology
 
 ```
-minikube      192.168.49.2 + 192.168.58.3   control plane, dual-homed  ─┬ bridge "minikube"
+minikube      192.168.49.2 + 192.168.58.3   control plane, dual-homed  ─┬ bridge "minikube-cloud"
               (+ .49.254/.58.254, claimed by the in-cluster ToR)        │
 minikube-m02  192.168.49.3                  worker                     ─┘
-minikube-m03  192.168.58.2                  worker                     ── bridge "minikube2"
+minikube-m03  192.168.58.2                  worker                     ── bridge "minikube-onprem"
 ```
 
 The "top-of-rack router" is a cluster workload: an FRR Deployment (part of
@@ -30,7 +30,8 @@ label its kubelet self-sets (`--node-labels=kubernetes.azure.com/mode=system`).
 The node sits on both bridges; the ToR pod claims `.254` secondary addresses
 on its interfaces and the kernel forwards between the legs.
 
-m03 deliberately lives on a **second docker bridge**. Docker's inter-bridge
+m03 is the "on-prem" node — deliberately on a **second docker bridge**, the
+WAN between cloud and on-prem played by docker itself. Docker's inter-bridge
 isolation is asymmetric (NAT-like: node-initiated egress works, nothing can dial
 in), which used to make m03 a zombie — Ready, running pods, but no pod network
 and no `kubectl logs/exec`. The fix is the real-world pattern: every node runs

@@ -67,9 +67,9 @@ services:
     # node label), which claims .254 secondary addresses on both interfaces and forwards
     # between the bridge legs. Every node's hop to/from the ToR stays intra-bridge.
     networks:
-      minikube:
+      minikube-cloud:
         ipv4_address: 192.168.49.2
-      minikube2:
+      minikube-onprem:
         ipv4_address: 192.168.58.3
 
   # generic worker node — the `kubelet` image stage. Same base/runtime chain, but no control
@@ -113,7 +113,7 @@ services:
       - varlog-m02:/var/log
       - /lib/modules:/lib/modules:ro
     networks:
-      minikube:
+      minikube-cloud:
         ipv4_address: 192.168.49.3
 
   minikube-m03:
@@ -153,15 +153,16 @@ services:
       - kubelet-m03:/var/lib/kubelet
       - varlog-m03:/var/log
       - /lib/modules:/lib/modules:ro
-    # EXPERIMENT: m03 lives on a different docker bridge than the rest of the cluster.
-    # Docker isolates bridge networks from each other by default (DOCKER-ISOLATION iptables).
+    # EXPERIMENT: m03 is the "on-prem" node — a different docker bridge than the rest of
+    # the cluster. Docker isolates bridge networks from each other by default
+    # (DOCKER-ISOLATION iptables), standing in for the WAN between cloud and on-prem.
     networks:
-      minikube2:
+      minikube-onprem:
         ipv4_address: 192.168.58.2
 
 networks:
-  minikube:
-    name: minikube
+  minikube-cloud:
+    name: minikube-cloud
     driver: bridge
     enable_ipv6: false
     ipam:
@@ -172,8 +173,8 @@ networks:
     driver_opts:
       com.docker.network.driver.mtu: "65535"
       com.docker.network.bridge.enable_ip_masquerade: "true"
-  minikube2:
-    name: minikube2
+  minikube-onprem:
+    name: minikube-onprem
     driver: bridge
     enable_ipv6: false
     ipam:
