@@ -1,0 +1,62 @@
+# Two-level templating, deliberately: helm renders the cluster-wide knobs (ASN,
+# timers); the __HOST_IP__/__TOR__ placeholders are per-NODE and get sed-rendered
+# by each pod at start from its downward-API host IP.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}
+data:
+  daemons: |
+    # FRR daemons to launch (read by the frr docker image's start script).
+    # zebra always runs; we only need bgpd on top.
+    bgpd=yes
+    ospfd=no
+    ospf6d=no
+    ripd=no
+    ripngd=no
+    isisd=no
+    pimd=no
+    pim6d=no
+    ldpd=no
+    nhrpd=no
+    eigrpd=no
+    babeld=no
+    sharpd=no
+    pbrd=no
+    bfdd=no
+    fabricd=no
+    vrrpd=no
+    pathd=no
+
+    vtysh_enable=yes
+    zebra_options="  -A 127.0.0.1 -s 90000000"
+    bgpd_options="   -A 127.0.0.1"
+  frr.conf.tpl: |
+    frr defaults traditional
+    log stdout
+    !
+    router bgp {{ .Values.asn }}
+     bgp router-id {{ .Values.routerId | default "__HOST_IP__" }}
+     ! eBGP without explicit route-maps (lab): accept everything inbound
+     no bgp ebgp-requires-policy
+     neighbor __TOR__ remote-as {{ .Values.peerAsn }}
+     neighbor __TOR__ timers {{ .Values.timers.keepalive }} {{ .Values.timers.holdtime }}
+     !
+     address-family ipv4 unicast
+      ! advertise only this node's podCIDR — no discovery, no CIDR knowledge: the
+      ! podCIDR is defined STRUCTURALLY as "the aggregate kernel route on the CNI's
+      ! interface". Works for any cluster CIDR, any allocator.
+      redistribute kernel route-map PODCIDR-ONLY
+     exit-address-family
+    !
+    ! ge 8 kills the default route (len 0); le 30 kills the CNI's host /32s
+    ip prefix-list NOT-HOST-ROUTES seq 5 permit 0.0.0.0/0 ge 8 le 30
+    !
+    route-map PODCIDR-ONLY permit 10
+     match interface {{ .Values.podCidrInterface }}
+     match ip address prefix-list NOT-HOST-ROUTES
+    !
+    line vty

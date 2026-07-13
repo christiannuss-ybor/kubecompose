@@ -1,0 +1,63 @@
+# Per-node FRR — see Chart.yaml. Why this heals even a node that boots with no
+# working pod network: hostNetwork needs no CNI, image pull and kubelet->apiserver
+# are node-initiated egress, so the pod lands on the broken node, BGP converges,
+# and zebra installs the routes that fix it. (The init container's apiserver call
+# rides the same escape hatch — the service VIP DNATs via kube-proxy's host
+# iptables to the apiserver, node-initiated.)
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+      annotations:
+        # config change -> pod roll
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      hostNetwork: true
+      priorityClassName: system-node-critical
+      tolerations:
+        # every node, every condition — incl. NotReady and network-unavailable
+        - operator: Exists
+      containers:
+        - name: frr
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW", "NET_BIND_SERVICE", "SYS_ADMIN"]
+          env:
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          # render the per-node bits (ToR = .{{ .Values.torSuffix }} of our own /24),
+          # then hand off to the image's normal start script (watchfrr: zebra + bgpd)
+          command:
+            - sh
+            - -c
+            - |
+              tor="${HOST_IP%.*}.{{ .Values.torSuffix }}"
+              cp /config/daemons /etc/frr/daemons
+              sed -e "s/__HOST_IP__/$HOST_IP/g" -e "s/__TOR__/$tor/g" \
+                /config/frr.conf.tpl > /etc/frr/frr.conf
+              echo "frr-node: router-id $HOST_IP peering with ToR $tor"
+              exec /usr/lib/frr/docker-start
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ .Release.Name }}

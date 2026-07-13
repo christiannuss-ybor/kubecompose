@@ -1,0 +1,10 @@
+apiVersion: v2
+name: frr-node
+description: >-
+  Per-node FRR BGP speaker (the kube-router pattern). Each node advertises the
+  podCIDR its CNI programmed into the kernel and installs routes learned from
+  the top-of-rack FRR — replacing static routes and cilium's advertise-only
+  BGP Control Plane.
+type: application
+version: 0.1.0
+appVersion: "10.2.1"

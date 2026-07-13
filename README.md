@@ -50,19 +50,23 @@ minikube/
   lib-systemd-system/   runtime-chain units: containerd -> dockerd -> cri-dockerd -> kubelet
   etc-systemd-system/   drop-ins + apply-addons oneshot
   systemd-wants/        .target.wants/ enablement symlinks
-  frr/                  the router: daemons + frr.conf (eBGP, no policy, 3 node peers)
+  frr/                  the ToR router: dynamic neighbors (bgp listen range), as-override,
+                        redistributes the bridge subnets — zero per-node config
   addons/               applied once per boot: cilium (or kindnet), coredns, storage,
-                        RBAC (cluster-admin, node bootstrap, kube-proxy), nginx canary,
-                        node-routes DaemonSet (static routes toward FRR)
-  addons-bgp/           cilium BGPv2 CRs (applied with retry — operator registers CRDs late)
+                        RBAC (cluster-admin, node bootstrap, kube-proxy), nginx canary
   var-lib-kubelet/      kubelet config
-Makefile                make minikube | make clean
+charts/frr-node/        per-node BGP DaemonSet (kube-router pattern) as a helm chart —
+                        values.yaml holds the knobs (ASN, timers, ToR convention); the
+                        podCIDR is discovered per node, not configured
+Makefile                make minikube | make frr-node | make clean
 ```
 
 ## Usage
 
 ```sh
-make minikube    # build node images + docker compose up + extract kubeconfig
+make minikube    # build node images + docker compose up + extract kubeconfig + helm frr-node
+make frr-node    # (re)apply the BGP chart to the running cluster — iterate on values.yaml
+                 # without a rebuild (helm upgrade --install)
 make clean       # down -v --remove-orphans (containers, networks, volumes)
 
 kubectl --kubeconfig=minikube/kubeconfig get nodes            # host access via 127.0.0.1:8443
@@ -97,21 +101,39 @@ kubectl --kubeconfig=minikube/kubeconfig logs -l app=nginx -c dump-iptables   # 
 
 ## Networking lab: native routing + BGP
 
-cilium runs `routing-mode: native` (no vxlan) with `enable-bgp-control-plane`.
-Each node advertises its podCIDR over eBGP to FRR (`addons-bgp/`); FRR's zebra
-installs the routes and the kernel forwards between its two bridge legs. Nodes
-carry static routes toward FRR for the pod /16 and the *other* bridge's node
-subnet — cilium's BGP advertises but never installs received routes, same
-division of labor as servers pointing at their ToR.
+cilium runs `routing-mode: native` (no vxlan) and stays out of BGP entirely.
+Routing is the **frr-node DaemonSet** (`charts/frr-node`, helm-delivered by
+the Makefile rather than baked into the image, so BGP knobs iterate against a
+running cluster) — the kube-router pattern, and the AKS/EKS-constrained model:
+nothing touches the node's systemd; a hostNetwork FRR pod per node speaks eBGP
+with the central "top-of-rack" FRR. Each side is fully dynamic:
 
-The node routes are programmed by the **node-routes DaemonSet**
-(`addons/node-routes.yaml`) — the AKS/EKS-constrained model: nothing touches
-the node's systemd; a hostNetwork + `NET_ADMIN` pod reconciles the routes in
-the host netns, like every cloud CNI ships its route programming. This works
-even on a node that boots broken: kubelet→apiserver is node-initiated egress
-(docker's isolation is asymmetric), hostNetwork pods need no CNI, and the
-image pull is internet egress — so the pod lands, programs routes, and the
-node heals itself.
+- **node → ToR**: bgpd redistributes the kernel podCIDR route cilium programs
+  (`10.244.X.0/24 via cilium_host`), filtered **structurally**: a route-map
+  matching `interface cilium_host` plus a prefix-length guard (`ge 8 le 30`
+  kills the default route and the CNI's host /32s). No podCIDR discovery, no
+  API calls, no RBAC — the podCIDR is *defined* as "the aggregate route on
+  the CNI's interface", so any cluster CIDR and any allocator works. (Earlier
+  iterations fetched the CIDR from the allocator's API object — kcm's
+  `node.spec.podCIDR` is a lie under cilium's cluster-pool IPAM, whose truth
+  is `CiliumNode`; AKS's delegated-plugin keeps it in Azure's
+  `NodeNetworkConfig` — until the route-map made the question moot.) No
+  hostname selectors, no per-node CRs. (cilium's own BGP Control Plane was
+  dropped: it advertises but never installs received routes — half the job.)
+- **ToR → node**: zebra *installs* what it learns — every other podCIDR plus
+  both bridge subnets (`redistribute connected` on the ToR), so cross-bridge
+  kubelet reachability is learned, not hardcoded. A node's own subnet also
+  arrives but loses to the connected route (distance 0 vs 20).
+- **ToR config is node-free**: `bgp listen range` accepts any node as a
+  dynamic neighbor; `as-override` lets all nodes share AS 65001 without
+  tripping eBGP loop detection. The only surviving convention: the ToR lives
+  at `.254` of each node's /24 (rendered into frr.conf at pod start from the
+  downward-API host IP).
+
+This heals even a node that boots broken: kubelet→apiserver is node-initiated
+egress (docker's isolation is asymmetric), hostNetwork pods need no CNI, and
+the image pull is internet egress — so the FRR pod lands, BGP converges, and
+the node routes itself out of the hole.
 
 Result, verified every boot by the **nginx canary DaemonSet**: an init container
 nslookups `kubernetes.default` through cluster DNS — a node with a broken
@@ -122,7 +144,12 @@ path heals. A second init container dumps the node's iptables
 Findings bank from getting here: hostPort works under kindnet (portmap chained)
 but silently no-ops on stock minikube cilium; docker inter-bridge isolation is
 initiation-asymmetric; vxlan dies across it because encap replies are new outer
-flows (fixable with a pinned `tunnel-source-port-range`, the untaken Avenue A).
+flows (fixable with a pinned `tunnel-source-port-range`, the untaken Avenue A);
+`node.spec.podCIDR` is a lie under cluster-pool IPAM (kcm keeps allocating it,
+cilium ignores it) and absent entirely under AKS's delegated-plugin, where the
+per-node overlay /24 hides in `NodeNetworkConfig.status.networkContainers[0]
+.primaryIP`; eBGP third-party next-hop means same-bridge pod traffic skips the
+ToR hop for free.
 
 ## Credentials / PKI
 

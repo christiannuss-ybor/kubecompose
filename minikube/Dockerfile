@@ -85,8 +85,6 @@ COPY etc-systemd-system/kubelet.service.d/20-control-plane.conf /etc/systemd/sys
 COPY etc-systemd-system/apply-addons.service /etc/systemd/system/apply-addons.service
 RUN ln -s /etc/systemd/system/apply-addons.service /etc/systemd/system/multi-user.target.wants/apply-addons.service
 COPY addons/ /addons/
-# cilium BGP peering CRs — applied with a retry loop (operator registers CRDs late)
-COPY addons-bgp/ /addons-bgp/
 
 # CNI toggle, read at boot by apply-addons.service (via /proc/1/environ — runtime env, not a
 # rebuild). on = cilium; off = kindnet fallback (minimal CNI, cluster stays healthy).
