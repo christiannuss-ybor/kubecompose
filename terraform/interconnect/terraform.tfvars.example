@@ -1,6 +1,0 @@
-# Every variable has a working default targeting the ybor-playground
-# environment (see variables.tf). Copy to terraform.tfvars only to
-# override, e.g.:
-#
-# aws_region  = "us-west-2"
-# aws_profile = "some-other-profile"

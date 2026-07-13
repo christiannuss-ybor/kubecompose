@@ -9,7 +9,7 @@ propagate automatically in both directions, no static route maintenance.
  AWS default VPC                                Azure VNet
  ┌─────────────────┐                        ┌──────────────────────┐
  │ Virtual Private │  tunnel 1 (IPsec/BGP)  │  VPN Gateway         │
- │ Gateway         │========================│  (VpnGw1,            │
+ │ Gateway         │========================│  (VpnGw1AZ,          │
  │ (ASN 64512)     │  tunnel 2 (IPsec/BGP)  │   ASN 65515)         │
  └─────────────────┘========================└──────────────────────┘
         │ route propagation                        │ automatic
@@ -33,12 +33,14 @@ reserved inside-CIDR list.
 
 ## Usage
 
-Defaults target the ybor-playground environment (AWS profile
+This directory is a module; provider configuration lives in the repo
+root `main.tf`, which is the plan/apply entry point. Defaults target
+the ybor-playground environment (AWS profile
 `ybor-playground-dev@p6m.dev`, Azure subscription `ybor-playground`,
-VNet `ybor-playground-dev-westus2`); override via `terraform.tfvars`
-if needed.
+VNet `ybor-playground-dev-westus2`).
 
 ```sh
+# from the repo root
 aws sso login --profile ybor-playground-dev@p6m.dev
 az login
 terraform init
@@ -66,11 +68,11 @@ az network vnet-gateway list-bgp-peer-status \
 
 | Item | Cost |
 |---|---|
-| Azure VPN Gateway (VpnGw1) | ~$140 |
+| Azure VPN Gateway (VpnGw1AZ) | ~$260 |
 | AWS Site-to-Site VPN (2 tunnels, $0.05/hr) | ~$36 |
 | Data transfer | egress rates both sides |
 
-Throughput ceiling: ~650 Mbps aggregate (VpnGw1), ~1.25 Gbps per tunnel
+Throughput ceiling: ~650 Mbps aggregate (VpnGw1AZ), ~1.25 Gbps per tunnel
 on the AWS side. Scale the Azure SKU via `azure_vpn_gateway_sku`.
 
 ## Limitations

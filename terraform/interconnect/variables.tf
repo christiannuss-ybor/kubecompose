@@ -6,18 +6,6 @@ variable "name_prefix" {
 
 # --- AWS ---
 
-variable "aws_region" {
-  description = "AWS region containing the VPC."
-  type        = string
-  default     = "us-east-1"
-}
-
-variable "aws_profile" {
-  description = "AWS shared-config profile to authenticate with."
-  type        = string
-  default     = "ybor-playground-dev@p6m.dev"
-}
-
 variable "amazon_side_asn" {
   description = "BGP ASN of the AWS Virtual Private Gateway."
   type        = number
@@ -25,15 +13,6 @@ variable "amazon_side_asn" {
 }
 
 # --- Azure ---
-
-# The provider must know its subscription before data sources can run,
-# so this is the one Azure identifier that can't be looked up by name.
-# GUID for the "ybor-playground" subscription.
-variable "azure_subscription_id" {
-  description = "Azure subscription containing the VNet."
-  type        = string
-  default     = "018bb159-9854-4df8-a51e-e327ae907b97"
-}
 
 variable "azure_resource_group_name" {
   description = "Existing resource group containing the VNet; VPN resources are created here too."
@@ -60,9 +39,9 @@ variable "azure_asn" {
 }
 
 variable "azure_vpn_gateway_sku" {
-  description = "Azure VPN gateway SKU. VpnGw1 = ~650 Mbps aggregate; scale up as needed."
+  description = "Azure VPN gateway SKU. Only AZ SKUs can be created since the 2025 SKU consolidation. VpnGw1AZ = ~650 Mbps aggregate; scale up as needed."
   type        = string
-  default     = "VpnGw1"
+  default     = "VpnGw1AZ"
 }
 
 # --- Tunnels ---

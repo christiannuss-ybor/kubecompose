@@ -29,6 +29,13 @@ resource "aws_customer_gateway" "azure" {
   tags = {
     Name = "${var.name_prefix}-cgw-azure"
   }
+
+  # When the Azure public IP changes, the replacement gateway must exist
+  # before the VPN connection can migrate off the old one; destroy-first
+  # deadlocks on "customer gateway is in use".
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_vpn_connection" "azure" {

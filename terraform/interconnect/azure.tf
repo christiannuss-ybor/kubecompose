@@ -15,12 +15,16 @@ resource "azurerm_subnet" "gateway" {
   address_prefixes     = [var.azure_gateway_subnet_cidr]
 }
 
+# Inherits create_before_destroy from aws_customer_gateway (lifecycle
+# propagates to dependencies), so any change that replaces this IP will
+# collide on the name. Delete the old IP out-of-band first, or rename.
 resource "azurerm_public_ip" "vpn_gateway" {
   name                = "${var.name_prefix}-vpngw-pip"
   location            = data.azurerm_resource_group.this.location
   resource_group_name = var.azure_resource_group_name
   allocation_method   = "Static"
   sku                 = "Standard"
+  zones               = ["1", "2", "3"]
 }
 
 locals {
