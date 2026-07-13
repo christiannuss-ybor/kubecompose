@@ -48,6 +48,10 @@ module "interconnect" {
   source = "./terraform/interconnect"
 }
 
+module "ec2" {
+  source = "./terraform/ec2"
+}
+
 output "aws_vpn_connection_id" {
   value = module.interconnect.aws_vpn_connection_id
 }
@@ -62,4 +66,12 @@ output "azure_vpn_gateway_public_ip" {
 
 output "bgp_sessions" {
   value = module.interconnect.bgp_sessions
+}
+
+output "ec2_public_ip" {
+  value = module.ec2.public_ip
+}
+
+output "ec2_private_ip" {
+  value = module.ec2.private_ip
 }
