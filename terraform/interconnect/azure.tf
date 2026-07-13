@@ -27,12 +27,32 @@ resource "azurerm_public_ip" "vpn_gateway" {
   zones               = ["1", "2", "3"]
 }
 
+# Second instance PIP. Azure Route Server refuses to coexist with an
+# active-passive VPN gateway, so the gateway must run active-active — which
+# requires a second ip_configuration + PIP. We don't chase H/A: AWS stays
+# pointed at instance 0 (below), so this instance is idle ballast that only
+# exists to unlock Route Server coexistence.
+resource "azurerm_public_ip" "vpn_gateway_2" {
+  name                = "${var.name_prefix}-vpngw-pip2"
+  location            = data.azurerm_resource_group.this.location
+  resource_group_name = var.azure_resource_group_name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+  zones               = ["1", "2", "3"]
+}
+
 locals {
   # AWS assigns itself the first host of each inside CIDR; Azure takes the second.
   tunnel1_aws_bgp_ip   = cidrhost(var.tunnel1_inside_cidr, 1)
   tunnel1_azure_bgp_ip = cidrhost(var.tunnel1_inside_cidr, 2)
   tunnel2_aws_bgp_ip   = cidrhost(var.tunnel2_inside_cidr, 1)
   tunnel2_azure_bgp_ip = cidrhost(var.tunnel2_inside_cidr, 2)
+  # APIPA for the idle second gateway instance. Azure requires active-active
+  # instances to declare an EQUAL number of custom BGP addresses, so instance 1
+  # gets two to match instance 0 — from distinct /30s (169.254.21.4/30,
+  # .22.4/30) that never collide with the two AWS tunnel /30s. Unused: no AWS
+  # tunnel terminates on this instance.
+  instance1_bgp_ips = ["169.254.21.6", "169.254.22.6"]
 }
 
 resource "azurerm_virtual_network_gateway" "this" {
@@ -44,12 +64,22 @@ resource "azurerm_virtual_network_gateway" "this" {
   vpn_type      = "RouteBased"
   sku           = var.azure_vpn_gateway_sku
   generation    = "Generation1"
-  active_active = false
+  active_active = true
   bgp_enabled   = true
 
+  # instance 0 — keeps the existing PIP + APIPA, so the AWS customer gateway
+  # and both live BGP sessions are untouched.
   ip_configuration {
     name                          = "default"
     public_ip_address_id          = azurerm_public_ip.vpn_gateway.id
+    private_ip_address_allocation = "Dynamic"
+    subnet_id                     = azurerm_subnet.gateway.id
+  }
+
+  # instance 1 — required for active-active; nothing on AWS connects to it.
+  ip_configuration {
+    name                          = "activeActive"
+    public_ip_address_id          = azurerm_public_ip.vpn_gateway_2.id
     private_ip_address_allocation = "Dynamic"
     subnet_id                     = azurerm_subnet.gateway.id
   }
@@ -63,6 +93,13 @@ resource "azurerm_virtual_network_gateway" "this" {
         local.tunnel1_azure_bgp_ip,
         local.tunnel2_azure_bgp_ip,
       ]
+    }
+
+    # instance 1's APIPA — two addresses to match instance 0's count (Azure's
+    # AddEqual rule), distinct /30s from the AWS tunnels, unused.
+    peering_addresses {
+      ip_configuration_name = "activeActive"
+      apipa_addresses       = local.instance1_bgp_ips
     }
   }
 }
