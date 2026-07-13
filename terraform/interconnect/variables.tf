@@ -38,6 +38,24 @@ variable "azure_asn" {
   default     = 65515
 }
 
+variable "azure_route_server_subnet_cidr" {
+  description = "CIDR for the RouteServerSubnet (must be /27 or larger). Free block after GatewaySubnet."
+  type        = string
+  default     = "10.225.255.32/27"
+}
+
+variable "cluster_bgp_asn" {
+  description = "ASN of the in-cluster FRR speaker that peers with Route Server. Must differ from Azure's 65515."
+  type        = number
+  default     = 65001
+}
+
+variable "cluster_bgp_peer_ip" {
+  description = "VNet IP (AKS node address) of the frr-node ToR speaker. Empty = stand up Route Server only, wire the peering later."
+  type        = string
+  default     = ""
+}
+
 variable "azure_vpn_gateway_sku" {
   description = "Azure VPN gateway SKU. Only AZ SKUs can be created since the 2025 SKU consolidation. VpnGw1AZ = ~650 Mbps aggregate; scale up as needed."
   type        = string
