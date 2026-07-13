@@ -1,0 +1,77 @@
+# Static routes toward the FRR router (192.168.<bridge>.254) — the AKS/EKS-constrained
+# replacement for what was node-routes.service: no systemd on the node, just a privileged-ish
+# DaemonSet, the same way real clouds ship route programming (AWS VPC CNI, kube-router, calico).
+#
+# Cilium's BGP Control Plane advertises podCIDRs to FRR but does not install routes received
+# from it (documented limitation), so the node side stays static — servers pointing at their
+# top-of-rack router.
+#
+# Why this escapes the chicken-and-egg on a broken node (m03 boots with no working pod
+# network or dial-in path):
+#   - kubelet -> apiserver is node-initiated egress; docker's inter-bridge isolation is
+#     asymmetric, so the node registers and receives this pod even while "broken"
+#   - hostNetwork: no CNI needed, starts before cilium (tolerations cover network-unavailable)
+#   - image pull is internet egress via docker NAT — also works from the broken node
+#   - hostNetwork = host netns, so `ip route replace` programs the node table; NET_ADMIN
+#     suffices, no full privileged
+# Reconcile loop (not a oneshot): routes self-heal after interface flaps or route flushes.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-routes
+  namespace: kube-system
+  labels:
+    app: node-routes
+spec:
+  selector:
+    matchLabels:
+      app: node-routes
+  template:
+    metadata:
+      labels:
+        app: node-routes
+    spec:
+      hostNetwork: true
+      priorityClassName: system-node-critical
+      tolerations:
+        # every node, every condition — incl. NotReady and node.kubernetes.io/network-unavailable
+        - operator: Exists
+      containers:
+        - name: routes
+          image: busybox:1.37
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]
+          env:
+            # downward API instead of parsing eth0 — with hostNetwork this is the node IP
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          command:
+            - sh
+            - -c
+            - |
+              frr="${HOST_IP%.*}.254"
+              echo "node-routes: pod /16 and foreign node subnets via $frr"
+              while true; do
+                # pod traffic: anything in the cluster pod range not on this node goes via FRR
+                # (the node's own podCIDR is a more-specific route through cilium and wins)
+                ip route replace 10.244.0.0/16 via "$frr"
+                # node-subnet reachability across bridges (kubelet API, cilium health): route
+                # the OTHER bridge via FRR. Never our own subnet — that would clobber the
+                # connected route.
+                for subnet in 192.168.49.0/24 192.168.58.0/24; do
+                  case "$HOST_IP" in
+                    "${subnet%.0/24}".*) ;;
+                    *) ip route replace "$subnet" via "$frr" ;;
+                  esac
+                done
+                sleep 30
+              done
+          resources:
+            requests:
+              cpu: 5m
+              memory: 8Mi
+            limits:
+              memory: 16Mi

@@ -48,12 +48,12 @@ minikube/
   .env                  central knobs (CILIUM=on|off)
   etc-kubernetes/       static-pod manifests (etcd, apiserver, cm, scheduler, kube-proxy)
   lib-systemd-system/   runtime-chain units: containerd -> dockerd -> cri-dockerd -> kubelet
-  etc-systemd-system/   drop-ins, apply-addons + node-routes oneshots
+  etc-systemd-system/   drop-ins + apply-addons oneshot
   systemd-wants/        .target.wants/ enablement symlinks
-  bin/node-routes.sh    static routes toward FRR (every node)
   frr/                  the router: daemons + frr.conf (eBGP, no policy, 3 node peers)
   addons/               applied once per boot: cilium (or kindnet), coredns, storage,
-                        RBAC (cluster-admin, node bootstrap, kube-proxy), nginx canary
+                        RBAC (cluster-admin, node bootstrap, kube-proxy), nginx canary,
+                        node-routes DaemonSet (static routes toward FRR)
   addons-bgp/           cilium BGPv2 CRs (applied with retry — operator registers CRDs late)
   var-lib-kubelet/      kubelet config
 Makefile                make minikube | make clean
@@ -100,9 +100,18 @@ kubectl --kubeconfig=minikube/kubeconfig logs -l app=nginx -c dump-iptables   # 
 cilium runs `routing-mode: native` (no vxlan) with `enable-bgp-control-plane`.
 Each node advertises its podCIDR over eBGP to FRR (`addons-bgp/`); FRR's zebra
 installs the routes and the kernel forwards between its two bridge legs. Nodes
-carry static routes toward FRR (`node-routes.service`) for the pod /16 and the
-*other* bridge's node subnet — cilium's BGP advertises but never installs
-received routes, same division of labor as servers pointing at their ToR.
+carry static routes toward FRR for the pod /16 and the *other* bridge's node
+subnet — cilium's BGP advertises but never installs received routes, same
+division of labor as servers pointing at their ToR.
+
+The node routes are programmed by the **node-routes DaemonSet**
+(`addons/node-routes.yaml`) — the AKS/EKS-constrained model: nothing touches
+the node's systemd; a hostNetwork + `NET_ADMIN` pod reconciles the routes in
+the host netns, like every cloud CNI ships its route programming. This works
+even on a node that boots broken: kubelet→apiserver is node-initiated egress
+(docker's isolation is asymmetric), hostNetwork pods need no CNI, and the
+image pull is internet egress — so the pod lands, programs routes, and the
+node heals itself.
 
 Result, verified every boot by the **nginx canary DaemonSet**: an init container
 nslookups `kubernetes.default` through cluster DNS — a node with a broken

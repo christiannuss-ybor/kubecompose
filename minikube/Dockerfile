@@ -65,10 +65,6 @@ COPY --from=pki /var/lib/minikube/certs/ca.crt /var/lib/minikube/certs/ca.crt
 COPY --from=pki /etc/kubernetes/bootstrap-kubelet.conf /etc/kubernetes/bootstrap-kubelet.conf
 COPY --from=pki /etc/kubernetes/kube-proxy.conf /etc/kubernetes/kube-proxy.conf
 
-# static routes toward the FRR router (every node; see node-routes.sh header)
-COPY bin/node-routes.sh /usr/local/bin/node-routes.sh
-COPY etc-systemd-system/node-routes.service /etc/systemd/system/node-routes.service
-
 # ---------- full (control plane) ----------
 FROM kubelet AS full
 

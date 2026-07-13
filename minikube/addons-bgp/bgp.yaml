@@ -2,7 +2,7 @@
 # own bridge and advertises its podCIDR. Applied by apply-addons.service with a retry loop,
 # since the cilium operator registers these CRDs some seconds after startup.
 # Note: cilium only ADVERTISES — it does not install routes received from FRR; node-side
-# routes toward FRR are static (node-routes.service), as a real ToR deployment would have.
+# routes toward FRR are static (node-routes DaemonSet), as a real ToR deployment would have.
 ---
 apiVersion: cilium.io/v2
 kind: CiliumBGPClusterConfig
