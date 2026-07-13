@@ -15,6 +15,17 @@ timers:
   keepalive: 3
   holdtime: 9
 
+# The "top-of-rack router" itself — a Deployment pinned to the system node (the
+# dual-homed control-plane box, labeled AKS-style by its kubelet). It claims the
+# .<torSuffix> secondary address on every eth* interface and forwards between the
+# bridge legs. The speaker DaemonSet anti-affinities away from this label: the ToR
+# doubles as that node's speaker (same netns — one bgpd per node, port 179).
+tor:
+  nodeSelector:
+    kubernetes.azure.com/mode: system
+  # dynamic-neighbor acceptance + the connected-subnet advertise filter
+  listenRange: 192.168.0.0/16
+
 # No pod-CIDR knob and no discovery: the podCIDR is defined structurally as "the
 # aggregate kernel route on the CNI's interface" (see the route-map in the
 # ConfigMap). Whatever CIDR the CNI programs there gets advertised.

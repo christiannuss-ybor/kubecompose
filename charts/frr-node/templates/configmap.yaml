@@ -60,3 +60,39 @@ data:
      match ip address prefix-list NOT-HOST-ROUTES
     !
     line vty
+  # The ToR's config — node-free: dynamic neighbors (bgp listen range), as-override
+  # (all nodes share one ASN), redistribute connected (the bridge subnets, learned by
+  # every node). Because the ToR shares the system node's netns, it is ALSO that
+  # node's speaker: the same structural route-map advertises the local podCIDR.
+  tor-frr.conf.tpl: |
+    frr defaults traditional
+    log stdout
+    !
+    router bgp {{ .Values.peerAsn }}
+     bgp router-id __HOST_IP__
+     ! eBGP without explicit inbound route-maps (lab): accept everything
+     no bgp ebgp-requires-policy
+     neighbor NODES peer-group
+     neighbor NODES remote-as {{ .Values.asn }}
+     neighbor NODES timers {{ .Values.timers.keepalive }} {{ .Values.timers.holdtime }}
+     bgp listen range {{ .Values.tor.listenRange }} peer-group NODES
+     !
+     address-family ipv4 unicast
+      neighbor NODES activate
+      neighbor NODES as-override
+      ! the bridge subnets (never lo etc.) + this node's own podCIDR
+      redistribute connected route-map BRIDGES-ONLY
+      redistribute kernel route-map PODCIDR-ONLY
+     exit-address-family
+    !
+    ip prefix-list BRIDGES seq 5 permit {{ .Values.tor.listenRange }} le 24
+    ip prefix-list NOT-HOST-ROUTES seq 5 permit 0.0.0.0/0 ge 8 le 30
+    !
+    route-map BRIDGES-ONLY permit 10
+     match ip address prefix-list BRIDGES
+    !
+    route-map PODCIDR-ONLY permit 10
+     match interface {{ .Values.podCidrInterface }}
+     match ip address prefix-list NOT-HOST-ROUTES
+    !
+    line vty

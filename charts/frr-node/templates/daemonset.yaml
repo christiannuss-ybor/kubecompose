@@ -25,6 +25,18 @@ spec:
     spec:
       hostNetwork: true
       priorityClassName: system-node-critical
+      # stay off the system node: the ToR Deployment lives there in the same host netns
+      # and doubles as its speaker — two bgpds would fight over port 179
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  {{- range $k, $v := .Values.tor.nodeSelector }}
+                  - key: {{ $k }}
+                    operator: NotIn
+                    values: [{{ $v | quote }}]
+                  {{- end }}
       tolerations:
         # every node, every condition — incl. NotReady and network-unavailable
         - operator: Exists

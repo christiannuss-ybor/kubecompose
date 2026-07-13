@@ -18,20 +18,24 @@ history.)
 ## Topology
 
 ```
-minikube      192.168.49.2   control plane        ─┐
-minikube-m02  192.168.49.3   worker                ├ bridge "minikube"
-                                                   │
-frr           .49.254/.58.254 dual-homed router   ─┼ (FRR, eBGP AS 65000)
-                                                   │
-minikube-m03  192.168.58.2   worker               ─┘ bridge "minikube2"
+minikube      192.168.49.2 + 192.168.58.3   control plane, dual-homed  ─┬ bridge "minikube"
+              (+ .49.254/.58.254, claimed by the in-cluster ToR)        │
+minikube-m02  192.168.49.3                  worker                     ─┘
+minikube-m03  192.168.58.2                  worker                     ── bridge "minikube2"
 ```
+
+The "top-of-rack router" is a cluster workload: an FRR Deployment (part of
+`charts/frr-node`) pinned to the control-plane node by the AKS-style system
+label its kubelet self-sets (`--node-labels=kubernetes.azure.com/mode=system`).
+The node sits on both bridges; the ToR pod claims `.254` secondary addresses
+on its interfaces and the kernel forwards between the legs.
 
 m03 deliberately lives on a **second docker bridge**. Docker's inter-bridge
 isolation is asymmetric (NAT-like: node-initiated egress works, nothing can dial
 in), which used to make m03 a zombie — Ready, running pods, but no pod network
-and no `kubectl logs/exec`. The fix is the real-world pattern: nodes speak BGP
-(cilium's BGP Control Plane, AS 65001) to the dual-homed FRR "top-of-rack"
-router; pod and cross-bridge node traffic hops through FRR, and every hop is
+and no `kubectl logs/exec`. The fix is the real-world pattern: every node runs
+an FRR speaker (AS 65001) that peers eBGP with the ToR; pod and cross-bridge
+node traffic hops through the ToR's dual-homed node, and every hop is
 intra-bridge, so the isolation never applies.
 
 ## Layout
@@ -50,14 +54,13 @@ minikube/
   lib-systemd-system/   runtime-chain units: containerd -> dockerd -> cri-dockerd -> kubelet
   etc-systemd-system/   drop-ins + apply-addons oneshot
   systemd-wants/        .target.wants/ enablement symlinks
-  frr/                  the ToR router: dynamic neighbors (bgp listen range), as-override,
-                        redistributes the bridge subnets — zero per-node config
   addons/               applied once per boot: cilium (or kindnet), coredns, storage,
                         RBAC (cluster-admin, node bootstrap, kube-proxy), nginx canary
   var-lib-kubelet/      kubelet config
-charts/frr-node/        per-node BGP DaemonSet (kube-router pattern) as a helm chart —
-                        values.yaml holds the knobs (ASN, timers, ToR convention); the
-                        podCIDR is discovered per node, not configured
+charts/frr-node/        ALL the BGP as one helm chart: per-node speaker DaemonSet
+                        (kube-router pattern) + the ToR router Deployment (pinned to
+                        the system node, doubles as its speaker); values.yaml holds
+                        the knobs (ASN, timers, ToR convention, listen range)
 Makefile                make minikube | make frr-node | make clean
 ```
 
@@ -71,7 +74,8 @@ make clean       # down -v --remove-orphans (containers, networks, volumes)
 
 kubectl --kubeconfig=minikube/kubeconfig get nodes            # host access via 127.0.0.1:8443
 CILIUM=off make minikube                                      # boot on kindnet instead
-docker exec frr vtysh -c 'show bgp summary'                   # BGP sessions
+kubectl --kubeconfig=minikube/kubeconfig -n kube-system \
+  exec deploy/frr-node-tor -- vtysh -c 'show bgp summary'     # BGP sessions (the ToR pod)
 kubectl --kubeconfig=minikube/kubeconfig logs -l app=nginx -c dump-iptables   # node iptables
 ```
 
