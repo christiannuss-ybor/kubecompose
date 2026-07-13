@@ -44,8 +44,23 @@ provider "azurerm" {
   subscription_id = var.azure_subscription_id
 }
 
+variable "cluster_bgp_peer_ip" {
+  description = "VNet IP (AKS node) of the in-cluster FRR speaker peering Route Server. Empty = no peering."
+  type        = string
+  default     = ""
+}
+
+variable "cluster_bgp_asn" {
+  description = "ASN of the in-cluster FRR speaker."
+  type        = number
+  default     = 65001
+}
+
 module "interconnect" {
   source = "./terraform/interconnect"
+
+  cluster_bgp_peer_ip = var.cluster_bgp_peer_ip
+  cluster_bgp_asn     = var.cluster_bgp_asn
 }
 
 module "ec2" {

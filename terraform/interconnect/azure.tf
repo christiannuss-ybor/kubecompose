@@ -141,8 +141,12 @@ resource "azurerm_virtual_network_gateway_connection" "aws_tunnel1" {
   shared_key                 = aws_vpn_connection.azure.tunnel1_preshared_key
   bgp_enabled                = true
 
+  # active-active: connection must name an APIPA for BOTH gateway instances.
+  # primary = instance 0 (the one AWS actually terminates on); secondary =
+  # instance 1's (idle, but Azure requires it declared).
   custom_bgp_addresses {
-    primary = local.tunnel1_azure_bgp_ip
+    primary   = local.tunnel1_azure_bgp_ip
+    secondary = local.instance1_bgp_ips[0]
   }
 }
 
@@ -159,6 +163,7 @@ resource "azurerm_virtual_network_gateway_connection" "aws_tunnel2" {
   bgp_enabled                = true
 
   custom_bgp_addresses {
-    primary = local.tunnel2_azure_bgp_ip
+    primary   = local.tunnel2_azure_bgp_ip
+    secondary = local.instance1_bgp_ips[1]
   }
 }
