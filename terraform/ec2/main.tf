@@ -104,6 +104,12 @@ resource "aws_instance" "this" {
   key_name               = aws_key_pair.this.key_name
   vpc_security_group_ids = [aws_security_group.this.id]
 
+  # AKS Flex Node needs ~8 GiB free in /var/lib for the nspawn rootfs + node artifacts;
+  # the AMI's default 8 GiB root is too small.
+  root_block_device {
+    volume_size = 30
+  }
+
   tags = {
     Name = "${var.name_prefix}-ec2"
   }
