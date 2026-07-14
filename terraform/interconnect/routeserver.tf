@@ -41,14 +41,39 @@ resource "azurerm_route_server" "this" {
   branch_to_branch_traffic_enabled = true
 }
 
-# BGP peering to the in-cluster FRR speaker. Gated on a peer IP being supplied: the
-# Route Server itself stands up now, and this is wired once the frr-node ToR is
-# deployed and its node IP is known (peer must be a VNet IP — an AKS node address).
-resource "azurerm_route_server_bgp_connection" "cluster" {
-  count = var.cluster_bgp_peer_ip == "" ? 0 : 1
+# BGP peering to the in-cluster FRR speakers. The peer IPs are the system-pool node
+# addresses, discovered from the VMSS rather than hardcoded — so a node reimage (which
+# changes the instance IP) is picked up on the next apply instead of silently breaking
+# the peering. AKS puts the node VMSS in a separate ("MC_...") resource group; find it by
+# the aks-managed-poolName tag (survives resize, unlike the generated VMSS name).
+#
+# NOTE: point-in-time — re-apply after the system pool scales/reimages. Making this fully
+# dynamic (auto-reconcile) is parked.
+data "azurerm_kubernetes_cluster" "this" {
+  name                = var.aks_cluster_name
+  resource_group_name = var.azure_resource_group_name
+}
 
-  name            = "${var.name_prefix}-rs-cluster"
+data "azurerm_resources" "system_vmss" {
+  resource_group_name = data.azurerm_kubernetes_cluster.this.node_resource_group
+  type                = "Microsoft.Compute/virtualMachineScaleSets"
+  required_tags = {
+    "aks-managed-poolName" = var.system_pool_name
+  }
+}
+
+data "azurerm_virtual_machine_scale_set" "system" {
+  name                = data.azurerm_resources.system_vmss.resources[0].name
+  resource_group_name = data.azurerm_kubernetes_cluster.this.node_resource_group
+}
+
+resource "azurerm_route_server_bgp_connection" "cluster" {
+  for_each = {
+    for i in data.azurerm_virtual_machine_scale_set.system.instances : i.name => i.private_ip_address
+  }
+
+  name            = "${var.name_prefix}-rs-${each.key}"
   route_server_id = azurerm_route_server.this.id
   peer_asn        = var.cluster_bgp_asn
-  peer_ip         = var.cluster_bgp_peer_ip
+  peer_ip         = each.value
 }

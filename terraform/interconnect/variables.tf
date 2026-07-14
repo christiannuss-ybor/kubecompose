@@ -50,10 +50,16 @@ variable "cluster_bgp_asn" {
   default     = 65001
 }
 
-variable "cluster_bgp_peer_ip" {
-  description = "VNet IP (AKS node address) of the frr-node ToR speaker. Empty = stand up Route Server only, wire the peering later."
+variable "aks_cluster_name" {
+  description = "AKS cluster name (used to find the node resource group holding the system-pool VMSS)."
   type        = string
-  default     = ""
+  default     = "ybor-playground-dev-westus2"
+}
+
+variable "system_pool_name" {
+  description = "AKS system nodepool whose node IPs are registered as Route Server BGP peers (matched by the aks-managed-poolName VMSS tag)."
+  type        = string
+  default     = "systemd4psv6"
 }
 
 variable "azure_vpn_gateway_sku" {
