@@ -15,10 +15,24 @@ routeServer:
   asn: 65515
   addresses: []                  # e.g. [10.225.255.36, 10.225.255.37]
 
-# Speakers run where the route server's BGP peers are registered — the system pool.
+# Target the real VMSS system pool deterministically: mode=system AND not Karpenter.
+# (Karpenter's default nodepool is mostly mode=user but demand-provisions a few mode=system
+# nodes for system-selecting workloads; those are ephemeral and excluded here. Both labels
+# are AKS-managed and survive a pool resize — unlike the agentpool name, which carries a
+# generated suffix.) The CriticalAddonsOnly toleration lets it land on the tainted system
+# node, matching the AKS system-add-on pattern.
 speaker:
-  nodeSelector:
-    kubernetes.azure.com/mode: system
+  nodeSelector: {}
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - { key: kubernetes.azure.com/mode, operator: In, values: ["system"] }
+              - { key: karpenter.sh/nodepool, operator: DoesNotExist }
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
 
 timers:
   keepalive: 3

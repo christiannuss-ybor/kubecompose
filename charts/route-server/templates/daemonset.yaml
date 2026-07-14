@@ -34,8 +34,14 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.speaker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.speaker.tolerations }}
       tolerations:
-        - operator: Exists
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       initContainers:
         - name: prepare-daemons
           image: "quay.io/frrouting/frr:{{ .Values.tooling.frr.version }}"
