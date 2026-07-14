@@ -1,0 +1,10 @@
+apiVersion: v2
+name: route-server
+description: >-
+  Route server integration for Kubernetes — a per-node FRR BGP speaker (DaemonSet)
+  that advertises each node's pod CIDR (discovered from Azure NodeNetworkConfig) to
+  an external route server such as Azure Route Server, making pod networks routable
+  off-cluster.
+type: application
+version: 0.2.0
+appVersion: "10.2.1"

@@ -1,0 +1,35 @@
+# The speaker's discover-podcidr init container reads its own node's NodeNetworkConfig
+# to discover the pod CIDR. Read-only, exactly that resource type — nothing else.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-speaker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}-speaker
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-speaker
+  labels:
+    app: {{ .Release.Name }}-speaker
+rules:
+  - apiGroups: ["acn.azure.com"]
+    resources: ["nodenetworkconfigs"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-speaker
+  labels:
+    app: {{ .Release.Name }}-speaker
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-speaker
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-speaker
+    namespace: {{ .Release.Namespace }}

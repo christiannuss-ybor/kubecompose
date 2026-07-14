@@ -1,0 +1,58 @@
+# Two-level templating: helm renders the static knobs (ASN, peers, timers) at package
+# time; gomplate renders the per-node values at pod start (custom [[ ]] delimiters, so
+# helm and gomplate never collide) — .Env.HOST_IP (downward API) and the pod CIDR read
+# from the /work/podcidr datasource that discover-podcidr wrote from NodeNetworkConfig.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}
+data:
+  daemons: |
+    # FRR daemons to launch. zebra always runs; we only add bgpd.
+    bgpd=yes
+    ospfd=no
+    ospf6d=no
+    ripd=no
+    ripngd=no
+    isisd=no
+    pimd=no
+    pim6d=no
+    ldpd=no
+    nhrpd=no
+    eigrpd=no
+    babeld=no
+    sharpd=no
+    pbrd=no
+    bfdd=no
+    fabricd=no
+    vrrpd=no
+    pathd=no
+
+    vtysh_enable=yes
+    zebra_options="  -A 127.0.0.1 -s 90000000"
+    bgpd_options="   -A 127.0.0.1"
+  # the node speaker: advertises this node's pod CIDR to the (external) route server
+  speaker.conf.tpl: |
+    frr defaults traditional
+    log stdout
+    !
+    router bgp {{ .Values.asn }}
+     bgp router-id [[ .Env.HOST_IP ]]
+     no bgp ebgp-requires-policy
+     no bgp network import-check
+    {{- range .Values.routeServer.addresses }}
+     neighbor {{ . }} remote-as {{ $.Values.routeServer.asn }}
+     neighbor {{ . }} timers {{ $.Values.timers.keepalive }} {{ $.Values.timers.holdtime }}
+    {{- end }}
+     !
+     address-family ipv4 unicast
+      network [[ (ds "podcidr") | strings.TrimSpace ]]
+    {{- range .Values.routeServer.addresses }}
+      neighbor {{ . }} activate
+    {{- end }}
+     exit-address-family
+    !
+    line vty

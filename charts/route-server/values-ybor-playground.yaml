@@ -1,0 +1,7 @@
+# ybor-playground-dev-westus2 (AKS) profile — the cluster-specific route server addresses
+# (Azure Route Server's two virtualRouterIps). Everything else uses the chart defaults
+# (ASN 65001/65515, system-pool placement, NodeNetworkConfig discovery).
+routeServer:
+  addresses:
+    - 10.225.255.36
+    - 10.225.255.37

@@ -1,0 +1,111 @@
+# Per-node BGP speaker. Advertises this node's pod CIDR to the route server so the
+# pod network is reachable off-cluster. hostNetwork means no CNI dependency: the pod
+# lands and BGP converges even on a node whose pod network isn't up yet.
+#
+# Startup is a chain of single-purpose init containers sharing /etc/frr (emptyDir):
+#   prepare-daemons   (frr)      writes the daemon list
+#   discover-podcidr  (kubectl)  reads NodeNetworkConfig -> /work/podcidr; exits non-zero
+#                                until the CIDR exists, so the kubelet keeps restarting it
+#   prepare-config    (gomplate) renders frr.conf; errors (and restarts) if /work/podcidr
+#                                isn't there yet
+# The frr container then just runs.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Release.Name }}-speaker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}-speaker
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-speaker
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-speaker
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      hostNetwork: true
+      priorityClassName: system-node-critical
+      serviceAccountName: {{ .Release.Name }}-speaker
+      {{- with .Values.speaker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      tolerations:
+        - operator: Exists
+      initContainers:
+        - name: prepare-daemons
+          image: "quay.io/frrouting/frr:{{ .Values.tooling.frr.version }}"
+          command: ["sh", "-c", "cp /config/daemons /etc/frr/daemons"]
+          volumeMounts:
+            - { name: config, mountPath: /config, readOnly: true }
+            - { name: etc-frr, mountPath: /etc/frr }
+        # read this node's pod CIDR from Azure's NodeNetworkConfig. Exits non-zero until
+        # it's populated; the kubelet restarts it until the write succeeds.
+        - name: discover-podcidr
+          # bitnami/kubectl (Debian, has a shell). Pinned to :latest — Bitnami moved
+          # version-tagged images behind Bitnami Secure Images; latest stays public.
+          image: "bitnami/kubectl:latest"
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          command:
+            - sh
+            - -c
+            - |
+              cidr=$(kubectl -n kube-system get nodenetworkconfig "$NODE_NAME" \
+                -o jsonpath='{.status.networkContainers[0].primaryIP}' 2>/dev/null || true)
+              [ -n "$cidr" ] || { echo "NNC podCIDR not ready for $NODE_NAME; exiting to retry"; exit 1; }
+              printf '%s' "$cidr" > /work/podcidr
+              echo "discovered podCIDR $cidr"
+          volumeMounts:
+            - { name: work, mountPath: /work }
+        # render frr.conf. gomplate runs as its own entrypoint (the image has no shell):
+        # HOST_IP from env, pod CIDR from /work/podcidr — if that file is missing gomplate
+        # errors and the init restarts.
+        - name: prepare-config
+          image: "gomplate/gomplate:{{ .Values.tooling.gomplate.version }}"
+          env:
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          args:
+            - --left-delim
+            - "[["
+            - --right-delim
+            - "]]"
+            - --datasource
+            - podcidr=/work/podcidr
+            - --file
+            - /config/speaker.conf.tpl
+            - --out
+            - /etc/frr/frr.conf
+          volumeMounts:
+            - { name: config, mountPath: /config, readOnly: true }
+            - { name: etc-frr, mountPath: /etc/frr }
+            - { name: work, mountPath: /work }
+      containers:
+        - name: frr
+          image: "quay.io/frrouting/frr:{{ .Values.tooling.frr.version }}"
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW", "NET_BIND_SERVICE", "SYS_ADMIN"]
+          command: ["sh", "-c", "exec /usr/lib/frr/docker-start"]
+          volumeMounts:
+            - { name: etc-frr, mountPath: /etc/frr }
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ .Release.Name }}
+        - name: etc-frr
+          emptyDir: {}
+        - name: work
+          emptyDir: {}

@@ -24,11 +24,18 @@ minikube-m02  192.168.49.3                  worker                     ─┘
 minikube-m03  192.168.58.2                  worker                     ── bridge "minikube-onprem"
 ```
 
-The "top-of-rack router" is a cluster workload: an FRR Deployment (part of
-`charts/frr-node`) pinned to the control-plane node by the AKS-style system
+> **Lab BGP is parked.** The in-cluster "route server" that healed the
+> cross-bridge node (an FRR Deployment claiming `.254` on both bridges, with
+> per-node speakers peering it) has been removed from `charts/route-server` —
+> the chart is currently AKS-shaped (speakers → an external Azure Route Server,
+> pod CIDR from NodeNetworkConfig). The docker-lab route server will be reworked
+> later. The description below reflects the parked design.
+
+The "top-of-rack router" was a cluster workload: the built-in route server —
+an FRR Deployment pinned to the control-plane node by the AKS-style system
 label its kubelet self-sets (`--node-labels=kubernetes.azure.com/mode=system`).
-The node sits on both bridges; the ToR pod claims `.254` secondary addresses
-on its interfaces and the kernel forwards between the legs.
+The node sits on both bridges; the route-server pod claimed `.254` secondary
+addresses on its interfaces and the kernel forwarded between the legs.
 
 m03 is the "on-prem" node — deliberately on a **second docker bridge**, the
 WAN between cloud and on-prem played by docker itself. Docker's inter-bridge
@@ -58,25 +65,27 @@ minikube/
   addons/               applied once per boot: cilium (or kindnet), coredns, storage,
                         RBAC (cluster-admin, node bootstrap, kube-proxy), nginx canary
   var-lib-kubelet/      kubelet config
-charts/frr-node/        ALL the BGP as one helm chart: per-node speaker DaemonSet
-                        (kube-router pattern) + the ToR router Deployment (pinned to
-                        the system node, doubles as its speaker); values.yaml holds
-                        the knobs (ASN, timers, ToR convention, listen range)
-Makefile                make minikube | make frr-node | make clean
+charts/route-server/    Route-server integration for Kubernetes (AKS): per-node speaker
+                        DaemonSet (kube-router pattern) that advertises each node's pod
+                        CIDR (from NodeNetworkConfig) to an external Azure Route Server.
+                        values.yaml + values-ybor-playground.yaml (the AKS profile).
+                        NOTE: the in-cluster route server for the docker lab was removed
+                        pending a rethink — see "Networking lab" below.
+Makefile                make minikube | make clean
 ```
 
 ## Usage
 
 ```sh
-make minikube    # build node images + docker compose up + extract kubeconfig + helm frr-node
-make frr-node    # (re)apply the BGP chart to the running cluster — iterate on values.yaml
-                 # without a rebuild (helm upgrade --install)
-make clean       # down -v --remove-orphans (containers, networks, volumes)
+make minikube      # build node images + docker compose up + extract kubeconfig
+make clean         # down -v --remove-orphans (containers, networks, volumes)
 
 kubectl --kubeconfig=minikube/kubeconfig get nodes            # host access via 127.0.0.1:8443
 CILIUM=off make minikube                                      # boot on kindnet instead
-kubectl --kubeconfig=minikube/kubeconfig -n kube-system \
-  exec deploy/frr-node-tor -- vtysh -c 'show bgp summary'     # BGP sessions (the ToR pod)
+
+# route-server chart is AKS-only right now; deploy to a real cluster by hand:
+helm upgrade --install route-server charts/route-server -n kube-system \
+  -f charts/route-server/values-ybor-playground.yaml --kubeconfig <aks-kubeconfig>
 kubectl --kubeconfig=minikube/kubeconfig logs -l app=nginx -c dump-iptables   # node iptables
 ```
 
@@ -107,11 +116,12 @@ kubectl --kubeconfig=minikube/kubeconfig logs -l app=nginx -c dump-iptables   # 
 ## Networking lab: native routing + BGP
 
 cilium runs `routing-mode: native` (no vxlan) and stays out of BGP entirely.
-Routing is the **frr-node DaemonSet** (`charts/frr-node`, helm-delivered by
+Routing is the **route-server chart** (`charts/route-server`, helm-delivered by
 the Makefile rather than baked into the image, so BGP knobs iterate against a
 running cluster) — the kube-router pattern, and the AKS/EKS-constrained model:
-nothing touches the node's systemd; a hostNetwork FRR pod per node speaks eBGP
-with the central "top-of-rack" FRR. Each side is fully dynamic:
+nothing touches the node's systemd; a hostNetwork FRR speaker per node
+(the `-speaker` DaemonSet) speaks eBGP with the route server. Each side is
+fully dynamic:
 
 - **node → ToR**: bgpd redistributes the kernel podCIDR route cilium programs
   (`10.244.X.0/24 via cilium_host`), filtered **structurally**: a route-map

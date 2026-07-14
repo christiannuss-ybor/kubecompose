@@ -1,0 +1,42 @@
+# Route Server for Kubernetes — a per-node FRR BGP speaker (DaemonSet) that advertises
+# each node's pod CIDR to an external route server (e.g. Azure Route Server), so the pod
+# network becomes routable off-cluster. Pod CIDR is discovered from Azure's
+# NodeNetworkConfig; the speaker peers the route server's addresses over eBGP.
+#
+# (An earlier version also shipped an in-cluster "built-in" route server for the docker
+# lab; that's been removed pending a rethink — this chart is currently AKS-shaped.)
+
+asn: 65001                       # ASN shared by the node speakers
+
+# The external route server the speakers peer (Azure Route Server: ASN 65515, its two
+# virtualRouterIps). addresses is empty by default — supply per cluster (see the
+# ybor-playground profile).
+routeServer:
+  asn: 65515
+  addresses: []                  # e.g. [10.225.255.36, 10.225.255.37]
+
+# Speakers run where the route server's BGP peers are registered — the system pool.
+speaker:
+  nodeSelector:
+    kubernetes.azure.com/mode: system
+
+timers:
+  keepalive: 3
+  holdtime: 9
+
+# Single-purpose tool images. Repositories are hardcoded in the templates
+# (quay.io/frrouting/frr, gomplate/gomplate, and bitnami/kubectl:latest for the NNC
+# lookup — Bitnami moved version tags behind Bitnami Secure Images, so kubectl has no
+# knob). Bump the versions here.
+tooling:
+  frr:
+    version: "10.2.1"
+  gomplate:
+    version: "stable"
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
