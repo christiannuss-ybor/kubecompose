@@ -12,24 +12,24 @@
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ .Release.Name }}-speaker
+  name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
   labels:
-    app: {{ .Release.Name }}-speaker
+    app: {{ .Release.Name }}
 spec:
   selector:
     matchLabels:
-      app: {{ .Release.Name }}-speaker
+      app: {{ .Release.Name }}
   template:
     metadata:
       labels:
-        app: {{ .Release.Name }}-speaker
+        app: {{ .Release.Name }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
       hostNetwork: true
       priorityClassName: system-node-critical
-      serviceAccountName: {{ .Release.Name }}-speaker
+      serviceAccountName: {{ .Release.Name }}
       {{- with .Values.speaker.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
