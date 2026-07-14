@@ -24,6 +24,11 @@ timers:
   keepalive: 3
   holdtime: 9
 
+# debug: true adds a cnuss/dev sidecar (sleep infinity) to each speaker pod, sharing the
+# pod netns + the config/etc-frr/work volumes and the frr caps — exec in to poke at BGP,
+# the rendered frr.conf, and the discovered pod CIDR. Off by default.
+debug: false
+
 # Single-purpose tool images. Repositories are hardcoded in the templates
 # (quay.io/frrouting/frr, gomplate/gomplate, and bitnami/kubectl:latest for the NNC
 # lookup — Bitnami moved version tags behind Bitnami Secure Images, so kubectl has no

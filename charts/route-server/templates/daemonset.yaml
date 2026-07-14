@@ -101,6 +101,22 @@ spec:
             - { name: etc-frr, mountPath: /etc/frr }
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+        {{- if .Values.debug }}
+        # debug sidecar: shares the pod netns + volumes + caps. Exec in to inspect BGP,
+        # the rendered /etc/frr/frr.conf, and /work/podcidr. imagePullPolicy Always since
+        # cnuss/dev:latest is a moving tag.
+        - name: debug
+          image: "cnuss/dev:latest"
+          imagePullPolicy: Always
+          command: ["sleep", "infinity"]
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW", "NET_BIND_SERVICE", "SYS_ADMIN"]
+          volumeMounts:
+            - { name: config, mountPath: /config, readOnly: true }
+            - { name: etc-frr, mountPath: /etc/frr }
+            - { name: work, mountPath: /work }
+        {{- end }}
       volumes:
         - name: config
           configMap:
