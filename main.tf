@@ -83,3 +83,7 @@ output "ec2_public_ip" {
 output "ec2_private_ip" {
   value = module.ec2.private_ip
 }
+
+output "flex_pod_cidr" {
+  value = module.interconnect.flex_pod_cidr
+}

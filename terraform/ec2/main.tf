@@ -104,6 +104,10 @@ resource "aws_instance" "this" {
   key_name               = aws_key_pair.this.key_name
   vpc_security_group_ids = [aws_security_group.this.id]
 
+  # Flex pods carry their own CIDR (not the instance IP), so the instance must forward
+  # packets whose src/dst isn't its own address — the default src/dst check drops those.
+  source_dest_check = false
+
   # AKS Flex Node needs ~8 GiB free in /var/lib for the nspawn rootfs + node artifacts;
   # the AMI's default 8 GiB root is too small.
   root_block_device {

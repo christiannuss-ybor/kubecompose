@@ -84,3 +84,37 @@ variable "tunnel2_inside_cidr" {
   type        = string
   default     = "169.254.22.0/30"
 }
+
+# --- Flex-node pod routing (secondary CIDR + VGW edge route table) ---
+
+variable "flex_pod_cidr" {
+  description = "Flex node pod CIDR. Advertised to Azure via a static TGW route; kept OUT of the VPC CIDR so the plain VPC route -> flex ENI is legal (the TGW advertises arbitrary prefixes, so no secondary-CIDR trick is needed)."
+  type        = string
+  default     = "172.20.0.0/24"
+}
+
+# Hardcoded for now (the flex EC2 is in the ec2 module; data-source by tag or wire from
+# module.ec2 later). Breaks if the EC2 / its primary ENI is recreated.
+variable "flex_ec2_eni_id" {
+  description = "ENI of the flex EC2 — the VPC route next hop for flex-pod-bound traffic."
+  type        = string
+  default     = "eni-02c62c384dfc6688b"
+}
+
+variable "flex_ec2_subnet_id" {
+  description = "Subnet the flex EC2 is in — used for the TGW VPC attachment."
+  type        = string
+  default     = "subnet-04de5bcfb8e8c3ee0"
+}
+
+variable "aks_pod_cidr" {
+  description = "AKS cluster pod-CIDR aggregate, routed VPC -> TGW so the flex EC2 reaches AKS pods."
+  type        = string
+  default     = "192.168.0.0/16"
+}
+
+variable "azure_vnet_cidr" {
+  description = "Azure VNet CIDR, routed VPC -> TGW so the flex EC2 reaches AKS nodes."
+  type        = string
+  default     = "10.224.0.0/12"
+}
