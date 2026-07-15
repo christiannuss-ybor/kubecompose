@@ -49,8 +49,10 @@ spec:
           volumeMounts:
             - { name: config, mountPath: /config, readOnly: true }
             - { name: etc-frr, mountPath: /etc/frr }
-        # read this node's pod CIDR from Azure's NodeNetworkConfig. Exits non-zero until
-        # it's populated; the kubelet restarts it until the write succeeds.
+        # read the cluster pod-CIDR aggregate (subnetAddressSpace — cilium's
+        # ipv4-native-routing-cidr) from Azure's NodeNetworkConfig. Advertising the aggregate
+        # (not this node's /24) lets cilium native-route the whole range to any node. Exits
+        # non-zero until it's populated; the kubelet restarts it until the write succeeds.
         - name: discover-podcidr
           # bitnami/kubectl (Debian, has a shell). Pinned to :latest — Bitnami moved
           # version-tagged images behind Bitnami Secure Images; latest stays public.
@@ -65,10 +67,10 @@ spec:
             - -c
             - |
               cidr=$(kubectl -n kube-system get nodenetworkconfig "$NODE_NAME" \
-                -o jsonpath='{.status.networkContainers[0].primaryIP}' 2>/dev/null || true)
-              [ -n "$cidr" ] || { echo "NNC podCIDR not ready for $NODE_NAME; exiting to retry"; exit 1; }
+                -o jsonpath='{.status.networkContainers[0].subnetAddressSpace}' 2>/dev/null || true)
+              [ -n "$cidr" ] || { echo "NNC subnetAddressSpace not ready for $NODE_NAME; exiting to retry"; exit 1; }
               printf '%s' "$cidr" > /work/podcidr
-              echo "discovered podCIDR $cidr"
+              echo "discovered pod-CIDR aggregate $cidr"
           volumeMounts:
             - { name: work, mountPath: /work }
         # render frr.conf. gomplate runs as its own entrypoint (the image has no shell):
