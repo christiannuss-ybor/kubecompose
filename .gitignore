@@ -11,4 +11,6 @@ minikube/kubeconfig
 *.tfstate
 *.tfstate.*
 terraform.tfvars
+*.auto.tfvars
+secrets.auto.tfvars
 crash.log

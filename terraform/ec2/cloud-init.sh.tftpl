@@ -1,0 +1,38 @@
+#!/bin/bash
+# AKS Flex Node bootstrap. Downloads the release binary, writes the config (rendered by
+# terraform jsonencode + base64, decoded here — no fragile heredoc escaping), joins the
+# cluster, then drops a DIY bridge CNI (managed cilium can't serve flex nodes).
+set -euxo pipefail
+exec > /var/log/flex-bootstrap.log 2>&1
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y systemd-container
+
+# aks-flex-node release binary (github releases, not built from source). The tarball holds a
+# single binary named aks-flex-node-linux-amd64; rename it to aks-flex-node.
+curl -fsSL "${afn_url}" -o /tmp/afn.tgz
+tar -xzf /tmp/afn.tgz -C /usr/local/bin
+mv /usr/local/bin/aks-flex-node-linux-amd64 /usr/local/bin/aks-flex-node
+chmod +x /usr/local/bin/aks-flex-node
+
+# config.json (bootstrap token injected via a terraform sensitive var; 0600 root)
+mkdir -p /etc/aks-flex-node
+echo '${config_json_b64}' | base64 -d > /etc/aks-flex-node/config.json
+chmod 600 /etc/aks-flex-node/config.json
+
+# install the systemd unit + bootstrap the nspawn machine "kube1" + TLS-join
+/usr/local/bin/aks-flex-node start --config /etc/aks-flex-node/config.json
+
+# Pre-create containerd's content store inside kube1 so spegel doesn't log a one-time
+# "no such directory" error racing containerd's first init (noise reduction; idempotent).
+mkdir -p /var/lib/machines/kube1/var/lib/containerd/io.containerd.content.v1.content
+
+# DIY bridge CNI: wait for kube1's cni dir, then drop the conflist (also rendered by
+# jsonencode). Pod CIDR is a slice AWS routes to this instance via the TGW; ipMasq off
+# preserves pod-IP identity across the WAN.
+for _ in $(seq 1 60); do
+  [ -d /var/lib/machines/kube1/etc/cni/net.d ] && break
+  sleep 5
+done
+echo '${cni_conf_b64}' | base64 -d > /var/lib/machines/kube1/etc/cni/net.d/10-flexnet.conflist

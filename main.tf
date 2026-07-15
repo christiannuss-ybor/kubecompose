@@ -50,14 +50,28 @@ variable "cluster_bgp_asn" {
   default     = 65001
 }
 
+variable "bootstrap_token" {
+  description = "Kubeadm-format bootstrap token for the flex node to TLS-join AKS. Supply via secrets.auto.tfvars (gitignored)."
+  type        = string
+  sensitive   = true
+}
+
 module "interconnect" {
   source = "./terraform/interconnect"
 
   cluster_bgp_asn = var.cluster_bgp_asn
+
+  # Wire the flex EC2's ENI + subnet from the ec2 module so the TGW attachment + VPC route
+  # follow the instance across rebuilds (no hardcoded ENI).
+  flex_ec2_eni_id    = module.ec2.eni_id
+  flex_ec2_subnet_id = module.ec2.subnet_id
 }
 
 module "ec2" {
   source = "./terraform/ec2"
+
+  bootstrap_token       = var.bootstrap_token
+  azure_subscription_id = var.azure_subscription_id
 }
 
 output "aws_vpn_connection_id" {
