@@ -43,6 +43,19 @@ timers:
 # the rendered frr.conf, and the discovered pod CIDR. Off by default.
 debug: false
 
+# kube-proxy for AKS Flex Nodes (kube-proxy.yaml). Off by default. Enable per cluster and set
+# apiServerHost to the cluster's apiserver FQDN — kube-proxy dials it directly, since the
+# 10.0.0.1 service VIP it programs isn't reachable until it's running.
+kubeProxy:
+  enabled: false
+  image: registry.k8s.io/kube-proxy:v1.33.8
+  apiServerHost: ""              # e.g. <cluster>-xxxxxxxx.hcp.<region>.azmk8s.io
+  clusterCidr: 192.168.0.0/16    # AKS pod-CIDR aggregate
+  nodeSelector:
+    kubernetes.azure.com/managed: "false"
+  tolerations:
+    - operator: Exists
+
 # Single-purpose tool images. Repositories are hardcoded in the templates
 # (quay.io/frrouting/frr, gomplate/gomplate, and bitnami/kubectl:latest for the NNC
 # lookup — Bitnami moved version tags behind Bitnami Secure Images, so kubectl has no

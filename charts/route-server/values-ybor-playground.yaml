@@ -5,3 +5,9 @@ routeServer:
   addresses:
     - 10.225.255.36
     - 10.225.255.37
+
+# kube-proxy on the flex node so service VIPs (10.0.0.1 apiserver, 10.0.0.10 kube-dns) resolve
+# there. apiServerHost = this cluster's apiserver FQDN.
+kubeProxy:
+  enabled: true
+  apiServerHost: "ybor-playground-dev-westus2-21x49g9f.hcp.westus2.azmk8s.io"
