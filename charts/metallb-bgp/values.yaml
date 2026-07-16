@@ -1,0 +1,78 @@
+# MetalLB-BGP wrapper — advertises LoadBalancer service VIPs to Azure Route Server via
+# BGP (frr-k8s backend). Two blocks below: (1) OUR config, consumed by templates/ to
+# render the MetalLB config CRs; (2) the upstream `metallb` subchart, keyed under
+# `metallb:`. Supply per-cluster values (RS addresses, VIP pool, speaker placement) in a
+# values-<cluster>.yaml overlay — see values-ybor-playground.yaml.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (1) Our config — rendered into MetalLB CRs (IPAddressPool / BGPPeer / BGPAdvertisement)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ASN the speakers advertise from (our side of the eBGP session). Matches the
+# route-server chart's node speakers so the fabric sees one consistent local ASN.
+localAsn: 65001
+
+# The external route server the speakers peer. Azure Route Server is ASN 65515 and
+# exposes TWO virtualRouterIps — peer BOTH (each speaker opens a session to each).
+# addresses is empty here; set it per cluster.
+routeServer:
+  asn: 65515
+  addresses: []                  # e.g. [10.225.255.36, 10.225.255.37]
+
+# Azure Route Server sits in the RouteServerSubnet, reachable from nodes only via VNet
+# routing (not directly connected to the node subnet). ebgpMultiHop clears frr-k8s's
+# single-hop "connected" check so the session can form. (Advertise-only, so the
+# resolve-via-default gotcha from the route-server chart does NOT apply here — MetalLB
+# never installs routes learned FROM the RS.)
+ebgpMultiHop: true
+
+# The pool MetalLB allocates LoadBalancer VIPs from. MUST be an RFC1918 (or CGNAT) block
+# that is OUTSIDE the VNet address space, outside the pod CIDR (192.168.0.0/16), and
+# outside the flex-node ranges 172.20.0.0/24 (flex pod CIDR) and 172.31.0.0/16 (flex EC2
+# VPC). addresses empty here; set it per cluster.
+vipPool:
+  name: bgp-vips
+  autoAssign: true
+  addresses: []                  # e.g. [10.243.0.0/24]
+
+# How the pool is advertised. /32 per VIP (aggregationLength 32) with next-hop = the
+# speaker node — Azure Route Server rewrites next-hop to the advertising peer anyway,
+# which is what we want (the VIP lands on a speaker node, then managed Cilium's
+# kube-proxy-replacement DNATs it to a backend pod). peers empty = advertise to all BGPPeers.
+advertisement:
+  aggregationLength: 32
+  peers: []
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (2) Upstream metallb subchart (github.com/metallb/metallb, chart 0.16.1)
+# ─────────────────────────────────────────────────────────────────────────────
+metallb:
+  # Opt-in: MetalLB only manages Services whose spec.loadBalancerClass matches this
+  # exactly. Everything else keeps its cloud-provider Azure LB untouched. Set the same
+  # value on a Service to hand it to MetalLB.
+  loadBalancerClass: metallb.ybor.ai/bgp
+
+  # frr-k8s mode (the non-deprecated BGP backend). Bundled subchart, not external.
+  frrk8s:
+    enabled: true
+  speaker:
+    frr:
+      enabled: false             # classic FRR mode off — mutually exclusive with frrk8s
+    # nodeSelector / tolerations pin the speaker to the dedicated speaker nodepool
+    # (Azure Route Server caps BGP peers at 8, so speakers can't run on every node).
+    # Set per cluster in the overlay.
+    nodeSelector: {}
+    tolerations: []
+  controller:
+    # Controller does IP allocation (no BGP); co-locate it on the speaker pool for a
+    # tidy, contained footprint. Set per cluster.
+    nodeSelector: {}
+    tolerations: []
+
+  # Values passed through to the frr-k8s subchart (note the hyphen). The frr-k8s daemon
+  # is what actually holds the BGP sessions, so it must be pinned to the SAME speaker
+  # nodepool as the speaker. Set per cluster.
+  frr-k8s:
+    frrk8s:
+      nodeSelector: {}
+      tolerations: []

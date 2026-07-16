@@ -33,3 +33,13 @@ resource "aws_route" "aks_nodes_via_tgw" {
   destination_cidr_block = var.azure_vnet_cidr
   transit_gateway_id     = aws_ec2_transit_gateway.this.id
 }
+
+# VPC -> AKS service VIPs via the TGW: the flex EC2 reaches MetalLB-advertised LoadBalancer
+# VIPs (e.g. the kube-dns VIP 10.1.0.10). The TGW already learns the /32s over the VPN from
+# Azure (Route Server -> VPN GW -> TGW propagation); this static VPC route is the missing piece
+# so the flex node stops black-holing the range to its default gateway.
+resource "aws_route" "aks_service_vips_via_tgw" {
+  route_table_id         = data.aws_route_table.main.id
+  destination_cidr_block = var.metallb_vip_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.this.id
+}

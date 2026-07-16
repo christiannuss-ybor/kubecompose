@@ -1,0 +1,15 @@
+{{- if .Values.vipPool.addresses }}
+# The pool MetalLB hands LoadBalancer VIPs from. Rendered only when addresses are set
+# (an empty pool would be a config error); supply them in the cluster overlay.
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: {{ .Values.vipPool.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}
+spec:
+  addresses:
+    {{- toYaml .Values.vipPool.addresses | nindent 4 }}
+  autoAssign: {{ .Values.vipPool.autoAssign }}
+{{- end }}

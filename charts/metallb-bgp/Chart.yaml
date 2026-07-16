@@ -1,0 +1,21 @@
+apiVersion: v2
+name: metallb-bgp
+description: >-
+  MetalLB in BGP mode (frr-k8s backend) for AKS clusters running Azure CNI Powered
+  by Cilium, where Cilium's own BGP control plane is disabled and the cilium-config
+  ConfigMap is locked by the AKS addon manager. This chart never touches the managed
+  CNI: it wraps the upstream metallb chart and layers our config — a service-VIP
+  IPAddressPool, BGPPeers to Azure Route Server's two router IPs, and a /32
+  BGPAdvertisement. It advertises LoadBalancer *service VIPs* (not pod CIDRs, which
+  aren't fabric-routable in native/overlay mode) so they become reachable from peered
+  networks / on-prem without a per-service Azure Load Balancer. See YP6M-3017.
+type: application
+version: 0.1.0
+# Tracks the pinned upstream metallb app version.
+appVersion: "0.16.1"
+dependencies:
+  - name: metallb
+    version: 0.16.1
+    repository: https://metallb.github.io/metallb
+    # The published metallb-0.16.1.tgz already bundles its own subcharts (crds,
+    # frr-k8s 0.0.25), so `helm dep build` only needs the one repo above.

@@ -1,0 +1,21 @@
+{{- if .Values.vipPool.addresses }}
+# Advertise the VIP pool as /32s (aggregationLength 32). Azure Route Server rewrites the
+# BGP next-hop to the advertising peer, so each /32 lands on a speaker node; managed
+# Cilium's kube-proxy-replacement then DNATs the VIP to a backend pod (which a cluster
+# node can reach on any node — the handoff this spike must confirm, YP6M-3017).
+apiVersion: metallb.io/v1beta1
+kind: BGPAdvertisement
+metadata:
+  name: {{ .Values.vipPool.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}
+spec:
+  ipAddressPools:
+    - {{ .Values.vipPool.name }}
+  aggregationLength: {{ .Values.advertisement.aggregationLength }}
+  {{- with .Values.advertisement.peers }}
+  peers:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

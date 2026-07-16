@@ -1,0 +1,47 @@
+# ybor-playground-dev-westus2 (AKS) profile for the MetalLB-BGP spike (YP6M-3017).
+#
+# Placement: pin to the AKS system pool (a bounded set of nodes) rather than a dedicated
+# nodepool — the finite node count keeps us under the Route Server 8-peer cap. This is the
+# SAME targeting the route-server chart's speaker uses.
+#
+# IMPORTANT: MetalLB's frr-k8s and the route-server speaker are both hostNetwork BGP
+# daemons peering the RS from the node IP — they cannot coexist on a node (port 179 / one
+# RS peering per peer IP). MetalLB REPLACES the route-server speaker here. Because both use
+# ASN 65001 and the same system-node IPs, MetalLB reuses the EXISTING RS peerings — no new
+# Azure-side peerings needed. Retire the route-server speaker first (needs a speaker.enabled
+# toggle on that chart); keep its flex-node kube-proxy (kubeProxy.enabled) untouched.
+
+routeServer:
+  addresses:
+    - 10.225.255.36
+    - 10.225.255.37
+
+# TODO(YP6M-3017): confirm this block is OUTSIDE the playground VNet address space before
+# deploying (query the VNet). Placeholder chosen to sit clear of nodes (10.224.0.0/16),
+# pods (192.168.0.0/16), and the flex ranges (172.20.0.0/24, 172.31.0.0/16).
+vipPool:
+  addresses:
+    - 10.243.0.0/24
+
+metallb:
+  # Pin controller + speaker + frr-k8s to the system pool: mode=system AND not a Karpenter
+  # node (Karpenter demand-provisions ephemeral mode=system nodes we must exclude). Anchors
+  # define it once. CriticalAddonsOnly toleration lands them on the tainted system nodes,
+  # matching the route-server chart.
+  controller:
+    affinity: &sysAffinity
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - { key: kubernetes.azure.com/mode, operator: In, values: ["system"] }
+                - { key: karpenter.sh/nodepool, operator: DoesNotExist }
+    tolerations: &sysTol
+      - { key: CriticalAddonsOnly, operator: Exists }
+  speaker:
+    affinity: *sysAffinity
+    tolerations: *sysTol
+  frr-k8s:
+    frrk8s:
+      affinity: *sysAffinity
+      tolerations: *sysTol

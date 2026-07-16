@@ -116,3 +116,9 @@ variable "azure_vnet_cidr" {
   type        = string
   default     = "10.224.0.0/12"
 }
+
+variable "metallb_vip_cidr" {
+  description = "MetalLB service-VIP range (e.g. the kube-dns VIP 10.1.0.10), routed VPC -> TGW so the flex EC2 reaches BGP-advertised LoadBalancer VIPs."
+  type        = string
+  default     = "10.1.0.0/24"
+}
