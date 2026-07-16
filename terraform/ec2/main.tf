@@ -84,16 +84,19 @@ variable "dns_service_ip" {
   default     = "10.0.0.10"
 }
 
-variable "flex_pod_cidr" {
-  description = "Pod CIDR for the flex node's bridge CNI (a /25 slice of the /24 the TGW advertises to Azure)."
-  type        = string
-  default     = "172.20.0.0/25"
+variable "flex_pod_cidrs" {
+  description = "Per-node pod CIDRs for the flex nodes' bridge CNI (host-local IPAM). One flex EC2 is created per entry (count), each getting its own non-overlapping /25 slice of 172.20.0.0/24."
+  type        = list(string)
+  default = [
+    "172.20.0.0/25",
+    "172.20.0.128/25",
+  ]
 }
 
 variable "afn_version" {
-  description = "aks-flex-node github release tag to download."
+  description = "aks-flex-node GitHub release tag to download. Must be a real release tag — the scheme is v0.1.x (e.g. v0.1.4, latest stable), NOT v0.14 (which 404s and aborts the cloud-init join)."
   type        = string
-  default     = "v0.14"
+  default     = "v0.1.4"
 }
 
 data "aws_vpc" "this" {
@@ -134,58 +137,67 @@ data "azurerm_kubernetes_cluster" "this" {
 }
 
 locals {
-  # config.json and the CNI conflist rendered by jsonencode (proper escaping for the CA cert),
-  # base64'd, and decoded in the cloud-init — no fragile heredoc interpolation.
-  flex_config = jsonencode({
-    azure = {
-      subscriptionId          = var.azure_subscription_id
-      tenantId                = var.azure_tenant_id
-      resourceManagerEndpoint = "https://management.azure.com"
-      targetAgentPoolName     = var.target_agentpool
-      targetCluster = {
-        resourceId = data.azurerm_kubernetes_cluster.this.id
-        location   = var.azure_location
-      }
-      bootstrapToken = { token = var.bootstrap_token }
-      arc            = { enabled = false }
-    }
-    agent      = { logLevel = "debug", logDir = "/var/log/aks-flex-node" }
-    components = { kubernetes = var.k8s_version }
-    networking = { dnsServiceIP = var.dns_service_ip }
-    node = {
-      kubelet = {
-        clusterFQDN = data.azurerm_kubernetes_cluster.this.fqdn
-        caCertData  = data.azurerm_kubernetes_cluster.this.kube_config[0].cluster_ca_certificate
-      }
-      taints = ["flexnode=true:NoSchedule"]
-    }
-  })
+  afn_url = "https://github.com/Azure/AKSFlexNode/releases/download/${var.afn_version}/aks-flex-node-linux-amd64.tar.gz"
 
-  cni_conf = jsonencode({
-    cniVersion = "1.0.0"
-    name       = "flexnet"
-    plugins = [
-      {
-        type        = "bridge"
-        bridge      = "cni0"
-        isGateway   = true
-        ipMasq      = false
-        hairpinMode = true
-        ipam = {
-          type   = "host-local"
-          ranges = [[{ subnet = var.flex_pod_cidr }]]
-          routes = [{ dst = "0.0.0.0/0" }]
+  # One cloud-init per pod CIDR in var.flex_pod_cidrs, indexed by count.index. config.json + the
+  # CNI conflist are rendered by jsonencode (proper escaping for the CA cert), base64'd, and
+  # decoded in the cloud-init — no fragile heredoc interpolation. Everything is identical across
+  # nodes except the pod CIDR: its own bridge-CNI range, and the node labels advertising it.
+  cloud_init = [
+    for pod_cidr in var.flex_pod_cidrs : templatefile("${path.module}/cloud-init.sh.tftpl", {
+      afn_url = local.afn_url
+      config_json_b64 = base64encode(jsonencode({
+        azure = {
+          subscriptionId          = var.azure_subscription_id
+          tenantId                = var.azure_tenant_id
+          resourceManagerEndpoint = "https://management.azure.com"
+          targetAgentPoolName     = var.target_agentpool
+          targetCluster = {
+            resourceId = data.azurerm_kubernetes_cluster.this.id
+            location   = var.azure_location
+          }
+          bootstrapToken = { token = var.bootstrap_token }
+          arc            = { enabled = false }
         }
-      },
-      { type = "portmap", capabilities = { portMappings = true } },
-    ]
-  })
-
-  cloud_init = templatefile("${path.module}/cloud-init.sh.tftpl", {
-    afn_url         = "https://github.com/Azure/AKSFlexNode/releases/download/${var.afn_version}/aks-flex-node-linux-amd64.tar.gz"
-    config_json_b64 = base64encode(local.flex_config)
-    cni_conf_b64    = base64encode(local.cni_conf)
-  })
+        agent      = { logLevel = "debug", logDir = "/var/log/aks-flex-node" }
+        components = { kubernetes = var.k8s_version }
+        networking = { dnsServiceIP = var.dns_service_ip }
+        node = {
+          kubelet = {
+            clusterFQDN = data.azurerm_kubernetes_cluster.this.fqdn
+            caCertData  = data.azurerm_kubernetes_cluster.this.kube_config[0].cluster_ca_certificate
+          }
+          # Publish this node's pod CIDR as labels (kubelet --node-labels at registration) so it's
+          # discoverable via kubectl. A label VALUE can't contain '/', so the CIDR is split into
+          # network + prefix-length; rejoin with '/' to reconstruct. Same var as the CNI conf below.
+          labels = {
+            "flex.azure.com/pod-network" = split("/", pod_cidr)[0]
+            "flex.azure.com/pod-prefix"  = split("/", pod_cidr)[1]
+          }
+          taints = ["flexnode=true:NoSchedule"]
+        }
+      }))
+      cni_conf_b64 = base64encode(jsonencode({
+        cniVersion = "1.0.0"
+        name       = "flexnet"
+        plugins = [
+          {
+            type        = "bridge"
+            bridge      = "cni0"
+            isGateway   = true
+            ipMasq      = false
+            hairpinMode = true
+            ipam = {
+              type   = "host-local"
+              ranges = [[{ subnet = pod_cidr }]]
+              routes = [{ dst = "0.0.0.0/0" }]
+            }
+          },
+          { type = "portmap", capabilities = { portMappings = true } },
+        ]
+      }))
+    })
+  ]
 }
 
 resource "aws_key_pair" "this" {
@@ -214,6 +226,14 @@ resource "aws_security_group" "this" {
     cidr_blocks = [var.azure_vnet_cidr]
   }
 
+  ingress {
+    description = "All traffic between flex nodes in this SG (node + pod-to-pod)"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    self        = true
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -226,48 +246,52 @@ resource "aws_security_group" "this" {
   }
 }
 
-# Deterministic ENI: minted here (not auto-created by the instance) so its ID + private IP
-# stay stable across instance rebuilds — the interconnect TGW attachment + VPC route don't
-# churn, and the flex node keeps the same private IP / node name. src/dst check off here
-# (flex pods carry their own CIDR, so the instance forwards non-own-IP packets).
+# Deterministic ENIs: minted here (not auto-created by the instances) so their IDs + private IPs
+# stay stable across instance rebuilds — the interconnect TGW attachment doesn't churn, and each
+# flex node keeps the same private IP / node name. src/dst check off (flex pods carry their own
+# CIDR, so the instance forwards non-own-IP packets). One per pod CIDR in var.flex_pod_cidrs.
 resource "aws_network_interface" "flex" {
+  count             = length(var.flex_pod_cidrs)
   subnet_id         = sort(data.aws_subnets.default.ids)[0]
   security_groups   = [aws_security_group.this.id]
   source_dest_check = false
 
   tags = {
-    Name = "${var.name_prefix}-flex-eni"
+    Name = "${var.name_prefix}-flex-eni-${count.index}"
   }
 }
 
-# An explicit primary ENI doesn't get the subnet's auto-assigned public IP, so pin an EIP for
-# SSH (also stable across rebuilds).
+# An explicit primary ENI doesn't get the subnet's auto-assigned public IP, so pin an EIP per
+# node for SSH (also stable across rebuilds).
 resource "aws_eip" "flex" {
+  count  = length(var.flex_pod_cidrs)
   domain = "vpc"
 
   tags = {
-    Name = "${var.name_prefix}-flex-eip"
+    Name = "${var.name_prefix}-flex-eip-${count.index}"
   }
 }
 
 resource "aws_eip_association" "flex" {
-  allocation_id        = aws_eip.flex.id
-  network_interface_id = aws_network_interface.flex.id
+  count                = length(var.flex_pod_cidrs)
+  allocation_id        = aws_eip.flex[count.index].id
+  network_interface_id = aws_network_interface.flex[count.index].id
 }
 
 resource "aws_instance" "this" {
+  count         = length(var.flex_pod_cidrs)
   ami           = data.aws_ami.ubuntu.id
   instance_type = var.instance_type
   key_name      = aws_key_pair.this.key_name
 
   network_interface {
-    network_interface_id = aws_network_interface.flex.id
+    network_interface_id = aws_network_interface.flex[count.index].id
     device_index         = 0
   }
 
   # Bootstrap the AKS Flex Node via cloud-init; a config change rebuilds the instance
   # (the ENI + EIP persist, so the flex node's identity is stable).
-  user_data                   = local.cloud_init
+  user_data                   = local.cloud_init[count.index]
   user_data_replace_on_change = true
 
   # AKS Flex Node needs ~8 GiB free in /var/lib for the nspawn rootfs + node artifacts.
@@ -276,24 +300,46 @@ resource "aws_instance" "this" {
   }
 
   tags = {
-    Name = "${var.name_prefix}-ec2"
+    Name = "${var.name_prefix}-ec2-${count.index}"
   }
 }
 
-output "public_ip" {
-  value = aws_eip.flex.public_ip
+# Preserve node 0's stable ENI/EIP identity when the module went single-instance -> count[0]
+# (so the first flex node isn't destroyed/recreated with a new private IP + node name).
+moved {
+  from = aws_network_interface.flex
+  to   = aws_network_interface.flex[0]
 }
 
-output "private_ip" {
-  value = aws_network_interface.flex.private_ip
+moved {
+  from = aws_eip.flex
+  to   = aws_eip.flex[0]
 }
 
-output "eni_id" {
-  description = "Deterministic ENI — the interconnect VPC route sends flex-pod traffic here; stable across rebuilds."
-  value       = aws_network_interface.flex.id
+moved {
+  from = aws_eip_association.flex
+  to   = aws_eip_association.flex[0]
+}
+
+moved {
+  from = aws_instance.this
+  to   = aws_instance.this[0]
+}
+
+output "public_ips" {
+  value = aws_eip.flex[*].public_ip
+}
+
+output "private_ips" {
+  value = aws_network_interface.flex[*].private_ip
+}
+
+output "eni_ids" {
+  description = "Deterministic ENIs, one per flex node; stable across rebuilds."
+  value       = aws_network_interface.flex[*].id
 }
 
 output "subnet_id" {
-  description = "ENI subnet — used for the TGW VPC attachment."
-  value       = aws_network_interface.flex.subnet_id
+  description = "ENI subnet — used for the TGW VPC attachment (all nodes share one subnet)."
+  value       = aws_network_interface.flex[0].subnet_id
 }
