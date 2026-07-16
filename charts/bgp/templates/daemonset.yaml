@@ -1,14 +1,14 @@
-# Per-node BGP speaker. Advertises this node's pod CIDR to the route server so the
-# pod network is reachable off-cluster. hostNetwork means no CNI dependency: the pod
-# lands and BGP converges even on a node whose pod network isn't up yet.
+# Per-node BGP speaker (FRR). Advertises this node's own pod CIDR and peers the other nodes it
+# discovers, so pod networks become routable across the fabric. hostNetwork means no CNI
+# dependency: the pod lands and BGP converges even on a node whose pod network isn't up yet.
 #
-# Startup is a chain of single-purpose init containers sharing /etc/frr (emptyDir):
-#   prepare-daemons   (frr)      writes the daemon list
-#   discover-podcidr  (kubectl)  reads NodeNetworkConfig -> /work/podcidr; exits non-zero
-#                                until the CIDR exists, so the kubelet keeps restarting it
-#   prepare-config    (gomplate) renders frr.conf; errors (and restarts) if /work/podcidr
-#                                isn't there yet
-# The frr container then just runs.
+# Startup is a chain of single-purpose init containers sharing /etc/frr + /work (emptyDir):
+#   prepare-daemons    (frr)      writes the daemon list
+#   discover-podcidr   (kubectl)  this node's pod CIDR -> /work/podcidr (NNC primaryIP, else the
+#                                 flex.azure.com/pod-* labels); exits non-zero until it resolves
+#   discover-neighbors (kubectl)  other nodes' IPs -> /work/neighbors.json (from NodeNetworkConfig)
+#   prepare-config     (gomplate) renders frr.conf from both; errors (and restarts) if podcidr missing
+# The frr container then runs (plus a debug sidecar when debug=true).
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
