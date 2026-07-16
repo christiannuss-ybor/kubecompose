@@ -17,6 +17,13 @@ metadata:
   labels:
     app: {{ .Release.Name }}
 spec:
+  # roll fast — these are non-critical bring-up speakers. maxUnavailable = how many pods update
+  # at once (k8s default is 1 = one-by-one). maxSurge isn't usable: the pod is hostNetwork and
+  # binds :179, so a replacement can't start alongside the old one.
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.speaker.maxUnavailable | quote }}
   selector:
     matchLabels:
       app: {{ .Release.Name }}
@@ -72,9 +79,34 @@ spec:
               echo "discovered pod CIDR $cidr"
           volumeMounts:
             - { name: work, mountPath: /work }
-        # render frr.conf. gomplate runs as its own entrypoint (the image has no shell):
-        # HOST_IP from env, pod CIDR from /work/podcidr — if that file is missing gomplate
-        # errors and the init restarts.
+        # discover BGP neighbors: every OTHER node's underlay IP from its NodeNetworkConfig
+        # (status.networkContainers[0].nodeIP), written as a JSON array to /work/neighbors.json
+        # for gomplate. First iteration: AKS nodes only — flex nodes have no NNC, so they are not
+        # peered here. Best-effort: an empty list is valid (a router with no neighbors), and the
+        # set is fixed at pod start (nodes added later need a pod restart to be picked up).
+        - name: discover-neighbors
+          image: "bitnami/kubectl:latest"
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          command:
+            - sh
+            - -c
+            - |
+              kubectl -n kube-system get nodenetworkconfig \
+                -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.networkContainers[0].nodeIP}{"\n"}{end}' 2>/dev/null \
+                | awk -v self="$NODE_NAME" '$1 != self && $2 != "" { print $2 }' \
+                | sort -u \
+                | awk 'BEGIN{sep="";printf "["} {printf "%s\"%s\"",sep,$0;sep=","} END{print "]"}' \
+                > /work/neighbors.json
+              echo "discovered neighbors: $(cat /work/neighbors.json)"
+          volumeMounts:
+            - { name: work, mountPath: /work }
+        # render frr.conf. gomplate runs as its own entrypoint (the image has no shell): HOST_IP
+        # from env, pod CIDR from /work/podcidr, neighbors from /work/neighbors.json — if podcidr
+        # is missing gomplate errors and the init restarts.
         - name: prepare-config
           image: "gomplate/gomplate:{{ .Values.tooling.gomplate.version }}"
           env:
@@ -89,6 +121,8 @@ spec:
             - "]]"
             - --datasource
             - podcidr=/work/podcidr
+            - --datasource
+            - neighbors=/work/neighbors.json
             - --file
             - /config/speaker.conf.tpl
             - --out

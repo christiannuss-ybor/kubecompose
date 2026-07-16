@@ -34,8 +34,9 @@ data:
     vtysh_enable=yes
     zebra_options="  -A 127.0.0.1 -s 90000000"
     bgpd_options="   -A 127.0.0.1"
-  # the node speaker: a bare BGP router advertising this node's pod CIDR. No neighbors yet —
-  # peers (and any peer-specific knobs, e.g. resolve-via-default / ebgp-multihop) come later.
+  # the node speaker: a BGP router advertising this node's pod CIDR and peering every other node
+  # discovered into /work/neighbors.json (iBGP — all speakers share .Values.asn, so remote-as ==
+  # the local ASN). Peer-specific knobs (next-hop-self, multihop) come in a later iteration.
   speaker.conf.tpl: |
     frr defaults traditional
     log stdout
@@ -44,9 +45,15 @@ data:
      bgp router-id [[ .Env.HOST_IP ]]
      no bgp ebgp-requires-policy
      no bgp network import-check
+    [[- range (ds "neighbors") ]]
+     neighbor [[ . ]] remote-as {{ .Values.asn }}
+    [[- end ]]
      !
      address-family ipv4 unicast
       network [[ (ds "podcidr") | strings.TrimSpace ]]
+    [[- range (ds "neighbors") ]]
+      neighbor [[ . ]] activate
+    [[- end ]]
      exit-address-family
     !
     line vty

@@ -11,6 +11,10 @@ asn: 65001                       # ASN shared by the node speakers
 # toleration so it tolerates ALL taints — the AKS system node (CriticalAddonsOnly) and the flex
 # EC2 nodes (flexnode=true:NoSchedule) included.
 speaker:
+  # rollout speed: how many pods update at once (k8s DaemonSet default is 1). "100%" = all at
+  # once (brief full restart, fine for these non-critical speakers); dial down (e.g. "25%")
+  # for a gentler roll.
+  maxUnavailable: "100%"
   tolerations:
     - operator: Exists
 
