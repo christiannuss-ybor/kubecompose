@@ -7,9 +7,14 @@ variable "name_prefix" {
 # --- AWS ---
 
 variable "amazon_side_asn" {
-  description = "BGP ASN of the AWS Virtual Private Gateway."
+  description = "BGP ASN of the AWS Transit Gateway."
   type        = number
   default     = 64512
+}
+
+variable "flex_ec2_subnet_id" {
+  description = "A VPC subnet for the TGW VPC attachment (the subnet the flex EC2 lives in)."
+  type        = string
 }
 
 # --- Azure ---
@@ -26,6 +31,12 @@ variable "azure_vnet_name" {
   default     = "ybor-playground-dev-westus2"
 }
 
+variable "azure_vnet_cidr" {
+  description = "Azure VNet address space, routed VPC -> TGW so the VPC reaches AKS nodes."
+  type        = string
+  default     = "10.224.0.0/12"
+}
+
 variable "azure_gateway_subnet_cidr" {
   description = "CIDR for the GatewaySubnet to create in the VNet (/27 or larger recommended)."
   type        = string
@@ -36,30 +47,6 @@ variable "azure_asn" {
   description = "BGP ASN of the Azure VPN gateway. 65515 is Azure's default; AWS reserves 7224, Azure reserves 65515-65520 on the AWS side, so keep these distinct."
   type        = number
   default     = 65515
-}
-
-variable "azure_route_server_subnet_cidr" {
-  description = "CIDR for the RouteServerSubnet (must be /27 or larger). Free block after GatewaySubnet."
-  type        = string
-  default     = "10.225.255.32/27"
-}
-
-variable "cluster_bgp_asn" {
-  description = "ASN of the in-cluster FRR speaker that peers with Route Server. Must differ from Azure's 65515."
-  type        = number
-  default     = 65001
-}
-
-variable "aks_cluster_name" {
-  description = "AKS cluster name (used to find the node resource group holding the system-pool VMSS)."
-  type        = string
-  default     = "ybor-playground-dev-westus2"
-}
-
-variable "system_pool_name" {
-  description = "AKS system nodepool whose node IPs are registered as Route Server BGP peers (matched by the aks-managed-poolName VMSS tag)."
-  type        = string
-  default     = "systemd4psv6"
 }
 
 variable "azure_vpn_gateway_sku" {
@@ -83,42 +70,4 @@ variable "tunnel2_inside_cidr" {
   description = "Link-local /30 for tunnel 2 BGP session (AWS gets .1, Azure gets .2)."
   type        = string
   default     = "169.254.22.0/30"
-}
-
-# --- Flex-node pod routing (secondary CIDR + VGW edge route table) ---
-
-variable "flex_pod_cidr" {
-  description = "Flex node pod CIDR. Advertised to Azure via a static TGW route; kept OUT of the VPC CIDR so the plain VPC route -> flex ENI is legal (the TGW advertises arbitrary prefixes, so no secondary-CIDR trick is needed)."
-  type        = string
-  default     = "172.20.0.0/24"
-}
-
-# Wired from module.ec2 (aws_instance outputs) at the root, so the TGW attachment + VPC route
-# follow the flex EC2 across rebuilds — no hardcoded ENI/subnet.
-variable "flex_ec2_eni_id" {
-  description = "ENI of the flex EC2 — the VPC route next hop for flex-pod-bound traffic."
-  type        = string
-}
-
-variable "flex_ec2_subnet_id" {
-  description = "Subnet the flex EC2 is in — used for the TGW VPC attachment."
-  type        = string
-}
-
-variable "aks_pod_cidr" {
-  description = "AKS cluster pod-CIDR aggregate, routed VPC -> TGW so the flex EC2 reaches AKS pods."
-  type        = string
-  default     = "192.168.0.0/16"
-}
-
-variable "azure_vnet_cidr" {
-  description = "Azure VNet CIDR, routed VPC -> TGW so the flex EC2 reaches AKS nodes."
-  type        = string
-  default     = "10.224.0.0/12"
-}
-
-variable "metallb_vip_cidr" {
-  description = "MetalLB service-VIP range (e.g. the kube-dns VIP 10.1.0.10), routed VPC -> TGW so the flex EC2 reaches BGP-advertised LoadBalancer VIPs."
-  type        = string
-  default     = "10.1.0.0/24"
 }

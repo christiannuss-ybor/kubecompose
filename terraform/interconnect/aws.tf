@@ -3,8 +3,7 @@ data "aws_vpc" "this" {
   default = true
 }
 
-# Main VPC route table — holds the routes that send AKS-bound traffic to the TGW and deliver
-# flex-pod-bound traffic to the flex EC2 (see flex-routing.tf).
+# Main VPC route table — holds the route that sends Azure-VNet-bound traffic to the TGW.
 data "aws_route_table" "main" {
   vpc_id = data.aws_vpc.this.id
 
@@ -14,11 +13,11 @@ data "aws_route_table" "main" {
   }
 }
 
-# Transit Gateway replaces the Virtual Private Gateway. Unlike the VGW (which only advertises
-# prefixes inside the VPC CIDR), a TGW-terminated VPN advertises whatever is in its route
-# table — so an arbitrary flex pod CIDR (172.20/24, NOT a VPC CIDR) can be advertised to Azure.
-# It's also the aggregation point for many flex nodes (via static routes now, TGW Connect BGP
-# later). ASN kept at amazon_side_asn (64512) so the Azure customer-gateway view is unchanged.
+# Transit Gateway terminates the Azure VPN and acts as the VPC's BGP router: it advertises its
+# route table (the VPC CIDR, propagated from the attachment) to Azure and learns the Azure VNet
+# address space in return. Only node/subnet ranges cross the VPN — pod overlays are never put in
+# the TGW route table, so they are not advertised. ASN kept at amazon_side_asn (64512) so the
+# Azure customer-gateway view is unchanged.
 resource "aws_ec2_transit_gateway" "this" {
   description                     = "${var.name_prefix} Azure VPN and flex nodes"
   amazon_side_asn                 = var.amazon_side_asn
@@ -72,4 +71,14 @@ resource "aws_vpn_connection" "azure" {
   tags = {
     Name = "${var.name_prefix}-vpn"
   }
+}
+
+# VPC -> Azure over the VPN: the VPC (incl. the flex EC2) reaches the Azure VNet address space
+# (AKS nodes, 10.224.0.0/12) via the TGW, which learns it over BGP from the Azure VPN gateway.
+# Node-to-node only: the AKS pod overlay (192.168/16) and the flex CNI (172.20/24) are never
+# advertised, so they stay unreachable across the interconnect by design.
+resource "aws_route" "aks_nodes_via_tgw" {
+  route_table_id         = data.aws_route_table.main.id
+  destination_cidr_block = var.azure_vnet_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.this.id
 }

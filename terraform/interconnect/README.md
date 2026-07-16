@@ -3,14 +3,19 @@
 BGP-routed IPsec VPN between the default VPC in an AWS region and an
 existing Azure VNet. No native peering exists between AWS and Azure, so
 this uses each cloud's managed VPN gateway with dynamic routing — routes
-propagate automatically in both directions, no static route maintenance.
+propagate automatically in both directions.
+
+Only node/subnet ranges cross the link: the AWS VPC CIDR and the Azure
+VNet address space. Pod overlays (AKS 192.168/16, flex-node CNI
+172.20/24) are deliberately not advertised, so they are unreachable
+across the interconnect.
 
 ```
  AWS default VPC                                Azure VNet
  ┌─────────────────┐                        ┌──────────────────────┐
- │ Virtual Private │  tunnel 1 (IPsec/BGP)  │  VPN Gateway         │
- │ Gateway         │========================│  (VpnGw1AZ,          │
- │ (ASN 64512)     │  tunnel 2 (IPsec/BGP)  │   ASN 65515)         │
+ │ Transit Gateway │  tunnel 1 (IPsec/BGP)  │  VPN Gateway         │
+ │ (ASN 64512)     │========================│  (VpnGw1AZ,          │
+ │                 │  tunnel 2 (IPsec/BGP)  │   ASN 65515)         │
  └─────────────────┘========================└──────────────────────┘
         │ route propagation                        │ automatic
         ▼                                          ▼
@@ -77,8 +82,10 @@ on the AWS side. Scale the Azure SKU via `azure_vpn_gateway_sku`.
 
 ## Limitations
 
-- Azure gateway is active-standby with a single public IP. Full
-  active-active HA needs two public IPs and a second AWS VPN connection.
+- The Azure gateway runs active-active with two public IPs, but AWS
+  terminates both tunnels on instance 0 only, so this is not true HA. The
+  active-active mode is a leftover from a removed Route Server; instance 1
+  is idle. True HA would add a second AWS VPN connection onto instance 1.
 - For >1 Gbps sustained or private-path requirements, move to
   Direct Connect + ExpressRoute via a NaaS provider (Megaport, Equinix
   Fabric) instead.

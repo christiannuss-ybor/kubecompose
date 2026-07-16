@@ -23,20 +23,3 @@ output "bgp_sessions" {
     tunnel2 = { aws = local.tunnel2_aws_bgp_ip, azure = local.tunnel2_azure_bgp_ip }
   }
 }
-
-output "route_server_asn" {
-  description = "Route Server's fixed ASN (always 65515). The cluster speaker peers to this."
-  value       = azurerm_route_server.this.virtual_router_asn
-}
-
-output "route_server_peer_ips" {
-  description = "The two internal IPs Route Server peers from — configure these as neighbors on the FRR speaker."
-  value       = azurerm_route_server.this.virtual_router_ips
-}
-
-# --- Flex-node pod routing ---
-
-output "flex_pod_cidr" {
-  description = "Flex node pod CIDR (a secondary VPC CIDR; the VGW advertises it to Azure, a VGW edge route table delivers it to the flex EC2)."
-  value       = var.flex_pod_cidr
-}

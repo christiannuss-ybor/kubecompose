@@ -27,11 +27,11 @@ resource "azurerm_public_ip" "vpn_gateway" {
   zones               = ["1", "2", "3"]
 }
 
-# Second instance PIP. Azure Route Server refuses to coexist with an
-# active-passive VPN gateway, so the gateway must run active-active — which
-# requires a second ip_configuration + PIP. We don't chase H/A: AWS stays
-# pointed at instance 0 (below), so this instance is idle ballast that only
-# exists to unlock Route Server coexistence.
+# Second instance PIP. Leftover from the (now-removed) Azure Route Server, which refused to
+# coexist with an active-standby gateway and forced active-active (requiring a second
+# ip_configuration + PIP). We keep active-active rather than reconfigure the live gateway (a
+# disruptive reset): this second instance is idle ballast — AWS terminates both tunnels on
+# instance 0 (below), so nothing connects here.
 resource "azurerm_public_ip" "vpn_gateway_2" {
   name                = "${var.name_prefix}-vpngw-pip2"
   location            = data.azurerm_resource_group.this.location

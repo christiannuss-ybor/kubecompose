@@ -44,12 +44,6 @@ provider "azurerm" {
   subscription_id = var.azure_subscription_id
 }
 
-variable "cluster_bgp_asn" {
-  description = "ASN of the in-cluster FRR speaker."
-  type        = number
-  default     = 65001
-}
-
 variable "bootstrap_token" {
   description = "Kubeadm-format bootstrap token for the flex node to TLS-join AKS. Supply via secrets.auto.tfvars (gitignored)."
   type        = string
@@ -59,11 +53,8 @@ variable "bootstrap_token" {
 module "interconnect" {
   source = "./terraform/interconnect"
 
-  cluster_bgp_asn = var.cluster_bgp_asn
-
-  # Wire the flex EC2's ENI + subnet from the ec2 module so the TGW attachment + VPC route
-  # follow the instance across rebuilds (no hardcoded ENI).
-  flex_ec2_eni_id    = module.ec2.eni_id
+  # Wire the flex EC2's subnet from the ec2 module so the TGW attachment follows the
+  # instance across rebuilds.
   flex_ec2_subnet_id = module.ec2.subnet_id
 }
 
@@ -96,8 +87,4 @@ output "ec2_public_ip" {
 
 output "ec2_private_ip" {
   value = module.ec2.private_ip
-}
-
-output "flex_pod_cidr" {
-  value = module.interconnect.flex_pod_cidr
 }
