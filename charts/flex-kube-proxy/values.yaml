@@ -20,18 +20,3 @@ resources:
     memory: 32Mi
   limits:
     memory: 128Mi
-
-# Optionally expose kube-dns as a MetalLB BGP LoadBalancer VIP so the flex node can resolve
-# cluster DNS WITHOUT a route to CoreDNS pod IPs (unreachable across the interconnect). The
-# flex node points its kubelet ClusterDNS at this VIP: flex -> VIP -> speaker node -> Cilium
-# kube-proxy-replacement DNATs -> CoreDNS pod (any node, cluster-sourced -> reachable).
-#
-# Requires the metallb-bgp chart (MetalLB frr-k8s + RS peering) already installed. The pool +
-# advertisement are created in MetalLB's namespace (metallbNamespace) so MetalLB sees them;
-# the VIP is a dedicated reserved /32 (autoAssign:false) that only this service claims.
-dnsVip:
-  enabled: false
-  address: "10.1.0.10"               # reserved /32; mirrors the in-cluster 10.0.0.10
-  loadBalancerClass: metallb.ybor.ai/bgp
-  metallbNamespace: metallb-system   # where MetalLB reads IPAddressPool/BGPAdvertisement CRs
-  poolName: flex-dns

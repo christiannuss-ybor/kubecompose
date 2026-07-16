@@ -1,6 +1,2 @@
 # ybor-playground-dev-westus2 (AKS) profile. apiServerHost = this cluster's apiserver FQDN.
 apiServerHost: "ybor-playground-dev-westus2-21x49g9f.hcp.westus2.azmk8s.io"
-
-# Expose kube-dns as a MetalLB BGP VIP at 10.1.0.10 (metallb-bgp must be installed).
-dnsVip:
-  enabled: true
