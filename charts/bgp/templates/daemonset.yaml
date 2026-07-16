@@ -79,11 +79,12 @@ spec:
               echo "discovered pod CIDR $cidr"
           volumeMounts:
             - { name: work, mountPath: /work }
-        # discover BGP neighbors: every OTHER node's underlay IP from its NodeNetworkConfig
-        # (status.networkContainers[0].nodeIP), written as a JSON array to /work/neighbors.json
-        # for gomplate. First iteration: AKS nodes only — flex nodes have no NNC, so they are not
-        # peered here. Best-effort: an empty list is valid (a router with no neighbors), and the
-        # set is fixed at pod start (nodes added later need a pod restart to be picked up).
+        # discover BGP neighbors: every OTHER node's underlay IP, as a JSON array to
+        # /work/neighbors.json for gomplate. Two sources merged: AKS nodes from their
+        # NodeNetworkConfig (status.networkContainers[0].nodeIP), and flex nodes (which have no
+        # NNC) by their InternalIP, selected via the flex.azure.com/pod-network label. Self is
+        # dropped by node name. Best-effort: an empty list is valid (a router with no neighbors),
+        # and the set is fixed at pod start (nodes added later need a pod restart to be picked up).
         - name: discover-neighbors
           image: "bitnami/kubectl:latest"
           env:
@@ -95,8 +96,12 @@ spec:
             - sh
             - -c
             - |
-              kubectl -n kube-system get nodenetworkconfig \
-                -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.networkContainers[0].nodeIP}{"\n"}{end}' 2>/dev/null \
+              {
+                kubectl -n kube-system get nodenetworkconfig \
+                  -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.networkContainers[0].nodeIP}{"\n"}{end}' 2>/dev/null
+                kubectl get nodes -l flex.azure.com/pod-network \
+                  -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}' 2>/dev/null
+              } \
                 | awk -v self="$NODE_NAME" '$1 != self && $2 != "" { print $2 }' \
                 | sort -u \
                 | awk 'BEGIN{sep="";printf "["} {printf "%s\"%s\"",sep,$0;sep=","} END{print "]"}' \

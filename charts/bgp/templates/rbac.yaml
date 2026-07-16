@@ -1,6 +1,7 @@
 # The speaker's init containers read NodeNetworkConfigs (discover-podcidr: its own node's, for
-# the pod CIDR; discover-neighbors: LISTs all of them, for peer nodeIPs) and the node's own
-# flex.azure.com/pod-* labels. Read-only: get+list nodenetworkconfigs, get nodes.
+# the pod CIDR; discover-neighbors: LISTs all, for AKS peer nodeIPs) and nodes (discover-podcidr:
+# its own node's flex.azure.com/pod-* labels; discover-neighbors: LISTs flex nodes by the
+# flex.azure.com/pod-network label for their IPs). Read-only: get+list on both.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -19,10 +20,11 @@ rules:
   - apiGroups: ["acn.azure.com"]
     resources: ["nodenetworkconfigs"]
     verbs: ["get", "list"]
-  # fallback path: read the node's own flex.azure.com/pod-* labels when it has no NNC
+  # nodes: discover-podcidr gets its own node's flex.azure.com/pod-* labels; discover-neighbors
+  # lists nodes by the flex.azure.com/pod-network label to find flex-node IPs
   - apiGroups: [""]
     resources: ["nodes"]
-    verbs: ["get"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
