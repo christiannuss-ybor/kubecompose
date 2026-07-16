@@ -1,0 +1,37 @@
+# Per-node FRR BGP speaker (DaemonSet) for Kubernetes — advertises each node's pod CIDR
+# to an external route server (e.g. Azure Route Server), so the pod network becomes
+# routable off-cluster. Pod CIDR is discovered from Azure's NodeNetworkConfig.
+#
+# (An earlier version also shipped an in-cluster "built-in" route server for the docker
+# lab; that's been removed pending a rethink — this chart is currently AKS-shaped.)
+
+asn: 65001                       # ASN shared by the node speakers
+
+# The speaker runs as a DaemonSet on every node. No affinity, and a blanket `operator: Exists`
+# toleration so it tolerates ALL taints — the AKS system node (CriticalAddonsOnly) and the flex
+# EC2 nodes (flexnode=true:NoSchedule) included.
+speaker:
+  tolerations:
+    - operator: Exists
+
+# debug: true adds a cnuss/dev sidecar (sleep infinity) to each speaker pod, sharing the
+# pod netns + the config/etc-frr/work volumes and the frr caps — exec in to poke at BGP,
+# the rendered frr.conf, and the discovered pod CIDR. Hardcoded on for now (bring-up debugging).
+debug: true
+
+# Single-purpose tool images. Repositories are hardcoded in the templates
+# (quay.io/frrouting/frr, gomplate/gomplate, and bitnami/kubectl:latest for the NNC
+# lookup — Bitnami moved version tags behind Bitnami Secure Images, so kubectl has no
+# knob). Bump the versions here.
+tooling:
+  frr:
+    version: "10.2.1"
+  gomplate:
+    version: "stable"
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 128Mi

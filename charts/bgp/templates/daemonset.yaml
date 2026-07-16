@@ -30,14 +30,6 @@ spec:
       hostNetwork: true
       priorityClassName: system-node-critical
       serviceAccountName: {{ .Release.Name }}
-      {{- with .Values.speaker.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.speaker.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
       {{- with .Values.speaker.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
@@ -49,10 +41,12 @@ spec:
           volumeMounts:
             - { name: config, mountPath: /config, readOnly: true }
             - { name: etc-frr, mountPath: /etc/frr }
-        # read the cluster pod-CIDR aggregate (subnetAddressSpace — cilium's
-        # ipv4-native-routing-cidr) from Azure's NodeNetworkConfig. Advertising the aggregate
-        # (not this node's /24) lets cilium native-route the whole range to any node. Exits
-        # non-zero until it's populated; the kubelet restarts it until the write succeeds.
+        # discover this node's OWN pod CIDR -> /work/podcidr for gomplate. Prefer Azure
+        # NodeNetworkConfig (managed AKS nodes): networkContainers[0].primaryIP is this node's
+        # own overlay /24 (e.g. 192.168.3.0/24) — the per-node prefix we advertise with
+        # next-hop=self, NOT the whole subnetAddressSpace /16 aggregate. Nodes with no NNC (the
+        # flex EC2 nodes) fall back to the flex.azure.com/pod-{network,prefix} labels set at
+        # registration. Exits non-zero until a CIDR resolves; the kubelet restarts it until it does.
         - name: discover-podcidr
           # bitnami/kubectl (Debian, has a shell). Pinned to :latest — Bitnami moved
           # version-tagged images behind Bitnami Secure Images; latest stays public.
@@ -67,10 +61,15 @@ spec:
             - -c
             - |
               cidr=$(kubectl -n kube-system get nodenetworkconfig "$NODE_NAME" \
-                -o jsonpath='{.status.networkContainers[0].subnetAddressSpace}' 2>/dev/null || true)
-              [ -n "$cidr" ] || { echo "NNC subnetAddressSpace not ready for $NODE_NAME; exiting to retry"; exit 1; }
+                -o jsonpath='{.status.networkContainers[0].primaryIP}' 2>/dev/null || true)
+              if [ -z "$cidr" ]; then
+                net=$(kubectl get node "$NODE_NAME" -o jsonpath='{.metadata.labels.flex\.azure\.com/pod-network}' 2>/dev/null || true)
+                pfx=$(kubectl get node "$NODE_NAME" -o jsonpath='{.metadata.labels.flex\.azure\.com/pod-prefix}' 2>/dev/null || true)
+                [ -n "$net" ] && [ -n "$pfx" ] && cidr="$net/$pfx"
+              fi
+              [ -n "$cidr" ] || { echo "no pod CIDR for $NODE_NAME yet (NNC primaryIP + flex labels both empty); exiting to retry"; exit 1; }
               printf '%s' "$cidr" > /work/podcidr
-              echo "discovered pod-CIDR aggregate $cidr"
+              echo "discovered pod CIDR $cidr"
           volumeMounts:
             - { name: work, mountPath: /work }
         # render frr.conf. gomplate runs as its own entrypoint (the image has no shell):

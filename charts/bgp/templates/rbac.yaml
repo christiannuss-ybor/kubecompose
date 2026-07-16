@@ -1,5 +1,6 @@
-# The speaker's discover-podcidr init container reads its own node's NodeNetworkConfig
-# to discover the pod CIDR. Read-only, exactly that resource type — nothing else.
+# The speaker's discover-podcidr init container reads its own node's NodeNetworkConfig for
+# the pod CIDR, falling back to the node's flex.azure.com/pod-* labels. Read-only: just those
+# two resource types (nodenetworkconfigs + nodes).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -17,6 +18,10 @@ metadata:
 rules:
   - apiGroups: ["acn.azure.com"]
     resources: ["nodenetworkconfigs"]
+    verbs: ["get"]
+  # fallback path: read the node's own flex.azure.com/pod-* labels when it has no NNC
+  - apiGroups: [""]
+    resources: ["nodes"]
     verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

@@ -1,4 +1,4 @@
-# Two-level templating: helm renders the static knobs (ASN, peers, timers) at package
+# Two-level templating: helm renders the static knobs (ASN) at package
 # time; gomplate renders the per-node values at pod start (custom [[ ]] delimiters, so
 # helm and gomplate never collide) — .Env.HOST_IP (downward API) and the pod CIDR read
 # from the /work/podcidr datasource that discover-podcidr wrote from NodeNetworkConfig.
@@ -34,35 +34,19 @@ data:
     vtysh_enable=yes
     zebra_options="  -A 127.0.0.1 -s 90000000"
     bgpd_options="   -A 127.0.0.1"
-  # the node speaker: advertises this node's pod CIDR to the (external) route server
+  # the node speaker: a bare BGP router advertising this node's pod CIDR. No neighbors yet —
+  # peers (and any peer-specific knobs, e.g. resolve-via-default / ebgp-multihop) come later.
   speaker.conf.tpl: |
     frr defaults traditional
     log stdout
-    ! Install BGP-learned routes (flex pod/VPC CIDRs) into the kernel. The Route
-    ! Server peers (10.225.255.x) sit one subnet away, reachable only via the
-    ! default route, so two knobs are needed for their advertised next-hops to
-    ! resolve: (1) resolve-via-default lets zebra match 0.0.0.0/0, and
-    ! (2) neighbor ebgp-multihop (below) clears bgpd's single-hop "connected"
-    ! requirement that otherwise refuses recursive/default resolution. Both are
-    ! required; resolve-via-default alone leaves the next-hops unresolved.
-    ! Mirrors the flex-node FRR.
-    ip nht resolve-via-default
     !
     router bgp {{ .Values.asn }}
      bgp router-id [[ .Env.HOST_IP ]]
      no bgp ebgp-requires-policy
      no bgp network import-check
-    {{- range .Values.routeServer.addresses }}
-     neighbor {{ . }} remote-as {{ $.Values.routeServer.asn }}
-     neighbor {{ . }} ebgp-multihop
-     neighbor {{ . }} timers {{ $.Values.timers.keepalive }} {{ $.Values.timers.holdtime }}
-    {{- end }}
      !
      address-family ipv4 unicast
       network [[ (ds "podcidr") | strings.TrimSpace ]]
-    {{- range .Values.routeServer.addresses }}
-      neighbor {{ . }} activate
-    {{- end }}
      exit-address-family
     !
     line vty

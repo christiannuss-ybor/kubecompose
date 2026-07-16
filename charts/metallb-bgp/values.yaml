@@ -9,7 +9,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ASN the speakers advertise from (our side of the eBGP session). Matches the
-# route-server chart's node speakers so the fabric sees one consistent local ASN.
+# bgp chart's node speakers so the fabric sees one consistent local ASN.
 localAsn: 65001
 
 # The external route server the speakers peer. Azure Route Server is ASN 65515 and
@@ -22,7 +22,7 @@ routeServer:
 # Azure Route Server sits in the RouteServerSubnet, reachable from nodes only via VNet
 # routing (not directly connected to the node subnet). ebgpMultiHop clears frr-k8s's
 # single-hop "connected" check so the session can form. (Advertise-only, so the
-# resolve-via-default gotcha from the route-server chart does NOT apply here — MetalLB
+# resolve-via-default gotcha from the bgp chart does NOT apply here — MetalLB
 # never installs routes learned FROM the RS.)
 ebgpMultiHop: true
 

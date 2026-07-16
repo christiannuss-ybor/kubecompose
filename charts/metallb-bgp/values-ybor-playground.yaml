@@ -2,13 +2,13 @@
 #
 # Placement: pin to the AKS system pool (a bounded set of nodes) rather than a dedicated
 # nodepool — the finite node count keeps us under the Route Server 8-peer cap. This is the
-# SAME targeting the route-server chart's speaker uses.
+# SAME targeting the bgp chart's speaker uses.
 #
-# IMPORTANT: MetalLB's frr-k8s and the route-server speaker are both hostNetwork BGP
+# IMPORTANT: MetalLB's frr-k8s and the bgp chart's speaker are both hostNetwork BGP
 # daemons peering the RS from the node IP — they cannot coexist on a node (port 179 / one
-# RS peering per peer IP). MetalLB REPLACES the route-server speaker here. Because both use
+# RS peering per peer IP). MetalLB REPLACES the bgp speaker here. Because both use
 # ASN 65001 and the same system-node IPs, MetalLB reuses the EXISTING RS peerings — no new
-# Azure-side peerings needed. Retire the route-server speaker first (needs a speaker.enabled
+# Azure-side peerings needed. Retire the bgp speaker first (needs a speaker.enabled
 # toggle on that chart); keep its flex-node kube-proxy (kubeProxy.enabled) untouched.
 
 routeServer:
@@ -27,7 +27,7 @@ metallb:
   # Pin controller + speaker + frr-k8s to the system pool: mode=system AND not a Karpenter
   # node (Karpenter demand-provisions ephemeral mode=system nodes we must exclude). Anchors
   # define it once. CriticalAddonsOnly toleration lands them on the tainted system nodes,
-  # matching the route-server chart.
+  # matching the bgp chart.
   controller:
     affinity: &sysAffinity
       nodeAffinity:

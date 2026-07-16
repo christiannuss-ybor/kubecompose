@@ -26,7 +26,7 @@ minikube-m03  192.168.58.2                  worker                     ── br
 
 > **Lab BGP is parked.** The in-cluster "route server" that healed the
 > cross-bridge node (an FRR Deployment claiming `.254` on both bridges, with
-> per-node speakers peering it) has been removed from `charts/route-server` —
+> per-node speakers peering it) has been removed from `charts/bgp` —
 > the chart is currently AKS-shaped (speakers → an external Azure Route Server,
 > pod CIDR from NodeNetworkConfig). The docker-lab route server will be reworked
 > later. The description below reflects the parked design.
@@ -65,9 +65,9 @@ minikube/
   addons/               applied once per boot: cilium (or kindnet), coredns, storage,
                         RBAC (cluster-admin, node bootstrap, kube-proxy), nginx canary
   var-lib-kubelet/      kubelet config
-charts/route-server/    Route-server integration for Kubernetes (AKS): per-node speaker
-                        DaemonSet (kube-router pattern) that advertises each node's pod
-                        CIDR (from NodeNetworkConfig) to an external Azure Route Server.
+charts/bgp/             Per-node BGP speaker for Kubernetes (AKS): a speaker DaemonSet
+                        (kube-router pattern) that advertises each node's pod CIDR (from
+                        NodeNetworkConfig) to an external route server (Azure Route Server).
                         values.yaml + values-ybor-playground.yaml (the AKS profile).
                         NOTE: the in-cluster route server for the docker lab was removed
                         pending a rethink — see "Networking lab" below.
@@ -83,9 +83,9 @@ make clean         # down -v --remove-orphans (containers, networks, volumes)
 kubectl --kubeconfig=minikube/kubeconfig get nodes            # host access via 127.0.0.1:8443
 CILIUM=off make minikube                                      # boot on kindnet instead
 
-# route-server chart is AKS-only right now; deploy to a real cluster by hand:
-helm upgrade --install route-server charts/route-server -n kube-system \
-  -f charts/route-server/values-ybor-playground.yaml --kubeconfig <aks-kubeconfig>
+# bgp chart is AKS-only right now; deploy to a real cluster by hand:
+helm upgrade --install bgp charts/bgp -n kube-system \
+  -f charts/bgp/values-ybor-playground.yaml --kubeconfig <aks-kubeconfig>
 kubectl --kubeconfig=minikube/kubeconfig logs -l app=nginx -c dump-iptables   # node iptables
 ```
 
@@ -116,7 +116,7 @@ kubectl --kubeconfig=minikube/kubeconfig logs -l app=nginx -c dump-iptables   # 
 ## Networking lab: native routing + BGP
 
 cilium runs `routing-mode: native` (no vxlan) and stays out of BGP entirely.
-Routing is the **route-server chart** (`charts/route-server`, helm-delivered by
+Routing is the **bgp chart** (`charts/bgp`, helm-delivered by
 the Makefile rather than baked into the image, so BGP knobs iterate against a
 running cluster) — the kube-router pattern, and the AKS/EKS-constrained model:
 nothing touches the node's systemd; a hostNetwork FRR speaker per node
