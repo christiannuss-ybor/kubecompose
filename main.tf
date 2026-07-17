@@ -56,6 +56,10 @@ module "interconnect" {
   # Wire the flex EC2's subnet from the ec2 module so the TGW attachment follows the
   # instance across rebuilds.
   flex_ec2_subnet_id = module.ec2.subnet_id
+
+  # Return-path routes (AKS pods -> flex pods): deliver each flex /25 to its owning ENI.
+  flex_ec2_eni_ids = module.ec2.eni_ids
+  flex_pod_cidrs   = module.ec2.flex_pod_cidrs
 }
 
 module "ec2" {

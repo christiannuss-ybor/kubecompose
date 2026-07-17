@@ -343,3 +343,8 @@ output "subnet_id" {
   description = "ENI subnet — used for the TGW VPC attachment (all nodes share one subnet)."
   value       = aws_network_interface.flex[0].subnet_id
 }
+
+output "flex_pod_cidrs" {
+  description = "Per-node flex pod CIDRs (index-aligned with eni_ids), for the interconnect return-path routes."
+  value       = var.flex_pod_cidrs
+}

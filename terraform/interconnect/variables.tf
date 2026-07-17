@@ -17,6 +17,22 @@ variable "flex_ec2_subnet_id" {
   type        = string
 }
 
+variable "flex_ec2_eni_ids" {
+  description = "ENI IDs of the flex nodes (from the ec2 module), index-aligned with flex_pod_cidrs — returning flex-pod traffic is routed to these in the VPC route table."
+  type        = list(string)
+}
+
+variable "flex_pod_cidrs" {
+  description = "Per-node flex pod CIDRs (from the ec2 module), index-aligned with flex_ec2_eni_ids."
+  type        = list(string)
+}
+
+variable "flex_pod_supernet" {
+  description = "Flex pod aggregate advertised to Azure via the TGW (covers all per-node flex /25s)."
+  type        = string
+  default     = "172.20.0.0/24"
+}
+
 # --- Azure ---
 
 variable "azure_resource_group_name" {
@@ -37,10 +53,34 @@ variable "azure_vnet_cidr" {
   default     = "10.224.0.0/12"
 }
 
+variable "aks_pod_cidr" {
+  description = "AKS pod overlay aggregate, routed VPC -> TGW so the flex node reaches AKS pods (the TGW learns the per-node /24s over BGP via the Route Server)."
+  type        = string
+  default     = "192.168.0.0/16"
+}
+
 variable "azure_gateway_subnet_cidr" {
   description = "CIDR for the GatewaySubnet to create in the VNet (/27 or larger recommended)."
   type        = string
   default     = "10.225.255.0/27"
+}
+
+variable "azure_route_server_subnet_cidr" {
+  description = "CIDR for the RouteServerSubnet (a free /27 in the VNet; Azure requires the subnet named exactly RouteServerSubnet). Sits just after the GatewaySubnet."
+  type        = string
+  default     = "10.225.255.32/27"
+}
+
+variable "relay_peer_ip" {
+  description = "IP of the cluster relay node the Route Server BGP-peers — the bgp chart's relay.nodeIP. Hardcoded to the stable AKS system node; re-apply if that node's IP changes."
+  type        = string
+  default     = "10.224.0.108"
+}
+
+variable "relay_asn" {
+  description = "BGP ASN of the cluster relay (the bgp chart's node speakers). Must differ from the Azure ASN (65515)."
+  type        = number
+  default     = 65001
 }
 
 variable "azure_asn" {

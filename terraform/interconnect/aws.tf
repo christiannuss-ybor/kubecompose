@@ -82,3 +82,13 @@ resource "aws_route" "aks_nodes_via_tgw" {
   destination_cidr_block = var.azure_vnet_cidr
   transit_gateway_id     = aws_ec2_transit_gateway.this.id
 }
+
+# VPC -> AKS pods over the VPN (forward-path datapath). The TGW now learns the per-node pod /24s
+# over BGP (relay -> Route Server -> VPN gateway), so send the pod aggregate to the TGW; it
+# forwards each /24 down the VPN, and Azure (RS-injected VNet routes) delivers to the owning node.
+# Without this, 192.168.x from the flex node hits the default route (IGW) and is dropped.
+resource "aws_route" "aks_pods_via_tgw" {
+  route_table_id         = data.aws_route_table.main.id
+  destination_cidr_block = var.aks_pod_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.this.id
+}
