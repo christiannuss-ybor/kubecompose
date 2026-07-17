@@ -18,6 +18,20 @@ speaker:
   tolerations:
     - operator: Exists
 
+# Relay: designate ONE node (by IP) whose speaker ALSO peers the Azure Route Server and
+# re-advertises the mesh-learned per-node pod /24s with next-hops preserved (attribute-unchanged),
+# so the RS injects them into the VNet + advertises to AWS. Hardcoded IP — each speaker pod
+# self-identifies by matching its own HOST_IP (downward API) against relay.nodeIP; only the match
+# gets the RS config, so the RS sees 1 peer, not 20. Empty nodeIP disables the relay role.
+# Only AKS pod /24s (192.168.0.0/16 le 24) are advertised to the RS — flex /25s are filtered out
+# (their next-hop is an AWS IP, not routable in the VNet). Keep in sync with terraform relay_peer_ip.
+relay:
+  nodeIP: "10.224.0.108"           # stable system-node IP (aks-systemd4psv6-...-vmss000049)
+  routeServerAsn: 65515
+  routeServerAddresses:
+    - 10.225.255.36
+    - 10.225.255.37
+
 # debug: true adds a cnuss/dev sidecar (sleep infinity) to each speaker pod, sharing the
 # pod netns + the config/etc-frr/work volumes and the frr caps — exec in to poke at BGP,
 # the rendered frr.conf, and the discovered pod CIDR. Hardcoded on for now (bring-up debugging).
