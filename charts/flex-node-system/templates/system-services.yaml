@@ -1,0 +1,35 @@
+# CoreDNS ClusterIP — the flex nodes' --cluster-dns. Selects the system pod; since it's hostNetwork
+# the endpoints are the system node IP(s), so flex nodes reach CoreDNS over the node-to-node VPN.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-dns
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}
+    k8s-app: {{ .Release.Name }}
+spec:
+  type: ClusterIP
+  clusterIP: {{ required "dnsClusterIP is required (a free IP in the service CIDR)" .Values.dnsClusterIP | quote }}
+  selector:
+    app: {{ .Release.Name }}
+  ports:
+    - { name: dns, port: 53, targetPort: 53, protocol: UDP }
+    - { name: dns-tcp, port: 53, targetPort: 53, protocol: TCP }
+---
+# Headless Service over the FRR relay's :179 — no VIP; resolves to the relay node IP(s) (hostNetwork
+# endpoints) for observability / peer inspection. Not on the datapath.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-bgp
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app: {{ .Release.Name }}
+  ports:
+    - { name: bgp, port: 179, targetPort: 179, protocol: TCP }

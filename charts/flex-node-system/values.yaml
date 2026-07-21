@@ -1,0 +1,60 @@
+# flex-node-system — everything the AKS Flex (cross-cloud) nodes depend on, in one chart:
+#   (1) `system.*` — a combined system-node pod (FRR relay + CoreDNS) that runs ON the system pool.
+#   (2) `kubeProxy.*` — a kube-proxy DaemonSet that runs ON the flex nodes.
+# Merges the former charts/bgp (FRR relay) and charts/flex-kube-proxy (kube-proxy + CoreDNS).
+
+# --- Per-cluster knobs (override these per target cluster) ---
+asn: 65001                       # the relay's ASN (eBGP to the Route Server)
+routeServer:
+  asn: 65515                     # Azure Route Server ASN (65515 is Azure's default)
+  addresses:                     # the RS's two virtualRouterIps (per-cluster)
+    - 10.225.255.36
+    - 10.225.255.37
+apiServerHost: ""                # REQUIRED: <cluster>-xxxxxxxx.hcp.<region>.azmk8s.io (kube-proxy dials this by FQDN)
+clusterCidr: 192.168.0.0/16      # AKS pod-CIDR aggregate (kube-proxy; flex pod src is outside it -> SNAT to node IP)
+dnsClusterIP: ""                 # REQUIRED: CoreDNS Service VIP (a free IP in the service CIDR); the flex nodes' --cluster-dns
+
+# (1) The system-node pod: a hostNetwork DaemonSet pinned to the AKS system VMSS pool, running the
+# FRR relay + CoreDNS in ONE pod (two containers). hostNetwork is required by FRR (it peers the
+# Route Server from the node IP and advertises next-hop=node IP); CoreDNS therefore also runs
+# hostNetwork and binds the node IP (Corefile `bind`), so flex nodes reach it over the plain
+# node-to-node VPN (the 10.224.0.0/12 route) instead of the RS-injected pod /24 — DNS is decoupled
+# from the relay. One CoreDNS per system node (scale the system pool to scale DNS).
+system:
+  # Node placement (nodeAffinity on karpenter.sh/nodepool DoesNotExist + this toleration) is
+  # hardcoded in templates/system-daemonset.yaml for now — turn the label into a value later.
+  tolerations:
+    - key: CriticalAddonsOnly    # system VMSS node taint
+      operator: Exists
+
+  # FRR relay: eBGP-peers the Azure Route Server and advertises THIS node's own /24 (next-hop=self)
+  # so istiod (a pod IP) stays reachable from flex nodes. Only an AKS pod /24 leaves toward the RS.
+  frr:
+    image: quay.io/frrouting/frr:10.2.1   # the ONLY image the system pod uses (init runs on it too)
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { memory: 128Mi }
+
+  # CoreDNS: mirrors managed AKS CoreDNS, bound to the node IP (see Corefile `bind`). Fronted by a
+  # pinned ClusterIP the flex nodes use as --cluster-dns.
+  coredns:
+    image: mcr.microsoft.com/oss/v2/kubernetes/coredns:v1.12.1-19   # matches managed AKS CoreDNS
+    resources:
+      requests: { cpu: 100m, memory: 70Mi }
+      limits: { memory: 170Mi }
+
+# (2) kube-proxy on the flex nodes ONLY (nodeSelector managed=false): programs the service DNAT
+# locally so in-cluster pods on a flex node can reach ClusterIP services. Reuses the cilium
+# ServiceAccount (already has services/endpoints/endpointslices/nodes read) — no new SA/RBAC; it
+# lacks events + servicecidrs perms, which is non-fatal (kube-proxy skips event recording and, on a
+# single static service CIDR, needs no servicecidr discovery).
+kubeProxy:
+  image: registry.k8s.io/kube-proxy:v1.33.8
+  serviceAccountName: cilium
+  nodeSelector:
+    kubernetes.azure.com/managed: "false"
+  tolerations:
+    - operator: Exists
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 128Mi }

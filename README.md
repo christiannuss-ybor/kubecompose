@@ -65,12 +65,11 @@ minikube/
   addons/               applied once per boot: cilium (or kindnet), coredns, storage,
                         RBAC (cluster-admin, node bootstrap, kube-proxy), nginx canary
   var-lib-kubelet/      kubelet config
-charts/bgp/             Per-node BGP speaker for Kubernetes (AKS): a speaker DaemonSet
-                        (kube-router pattern) that advertises each node's pod CIDR (from
-                        NodeNetworkConfig) to an external route server (Azure Route Server).
-                        values.yaml + values-ybor-playground.yaml (the AKS profile).
-                        NOTE: the in-cluster route server for the docker lab was removed
-                        pending a rethink — see "Networking lab" below.
+charts/flex-node-system/ System-side support for AKS Flex (cross-cloud) nodes, in one chart:
+                        a combined system-node pod (FRR Route-Server relay + CoreDNS, hostNetwork,
+                        bound to the node IP) plus a kube-proxy DaemonSet that runs on the flex
+                        nodes. Merges the former bgp + flex-kube-proxy charts. values.yaml +
+                        values-ybor-playground.yaml (the AKS profile).
 Makefile                make minikube | make clean
 ```
 
@@ -83,9 +82,9 @@ make clean         # down -v --remove-orphans (containers, networks, volumes)
 kubectl --kubeconfig=minikube/kubeconfig get nodes            # host access via 127.0.0.1:8443
 CILIUM=off make minikube                                      # boot on kindnet instead
 
-# bgp chart is AKS-only right now; deploy to a real cluster by hand:
-helm upgrade --install bgp charts/bgp -n kube-system \
-  -f charts/bgp/values-ybor-playground.yaml --kubeconfig <aks-kubeconfig>
+# flex-node-system is AKS-only; deploy to a real cluster by hand:
+helm upgrade --install flex-node-system charts/flex-node-system -n kube-system \
+  -f charts/flex-node-system/values-ybor-playground.yaml --kubeconfig <aks-kubeconfig>
 kubectl --kubeconfig=minikube/kubeconfig logs -l app=nginx -c dump-iptables   # node iptables
 ```
 

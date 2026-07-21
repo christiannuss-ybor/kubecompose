@@ -1,3 +1,0 @@
-# ybor-playground-dev-westus2 (AKS) profile. No cluster-specific overrides right now — the
-# chart's bare-router defaults apply. Per-cluster BGP neighbor addresses will live here once
-# neighbors are added back.

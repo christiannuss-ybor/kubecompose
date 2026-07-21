@@ -1,0 +1,146 @@
+# The system-node pod: FRR relay + CoreDNS in ONE hostNetwork pod, DaemonSet-pinned to the AKS
+# system VMSS pool. FRR advertises this node's own pod /24 to the Azure Route Server (keeps istiod,
+# a pod IP, reachable from flex nodes); CoreDNS serves cluster DNS bound to the node IP, so flex
+# nodes reach it over the node-to-node VPN (decoupled from the RS). One CoreDNS per system node.
+#
+# Init (both on the cached frr image, so a restart never pulls a throwaway tool image):
+#   discover-podcidr  reads this node's /24 from its NodeNetworkConfig via the apiserver (busybox
+#                     wget + the SA token, verified against the cluster CA); retries until it resolves.
+#   prepare-config    renders /etc/frr/frr.conf and /etc/coredns/Corefile with sed (node IP + the
+#                     discovered /24) and drops the FRR daemon list.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}
+spec:
+  # Default updateStrategy (RollingUpdate, maxUnavailable 1). Note these pods are hostNetwork
+  # (bind :179/:53), so a replacement can't surge alongside the old one — updates are one-at-a-time.
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/system-configmap.yaml") . | sha256sum }}
+    spec:
+      hostNetwork: true
+      priorityClassName: system-node-critical
+      serviceAccountName: {{ .Release.Name }}
+      # Pin to the system VMSS node: schedule only where karpenter.sh/nodepool is ABSENT — present
+      # on every Karpenter node, absent on the system VMSS pool AND on flex nodes (flex nodes are
+      # then excluded by their untolerated flexnode taint). Hardcoded for now; make it a value later.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: karpenter.sh/nodepool
+                    operator: DoesNotExist
+      {{- with .Values.system.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        # discover this node's OWN pod /24 -> /work/podcidr, from its Azure NodeNetworkConfig
+        # (status.networkContainers[0].primaryIP). Read straight from the apiserver with the frr
+        # image's busybox wget + the SA token; busybox wget takes no --ca flag, so append the
+        # cluster CA to the trust bundle (ephemeral, this container) for a verified TLS call.
+        - name: discover-podcidr
+          image: "{{ .Values.system.frr.image }}"
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          command:
+            - sh
+            - -c
+            - |
+              SA=/var/run/secrets/kubernetes.io/serviceaccount
+              cat "$SA/ca.crt" >> /etc/ssl/certs/ca-certificates.crt
+              cidr=$(wget -qO- --header="Authorization: Bearer $(cat "$SA/token")" \
+                "https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/apis/acn.azure.com/v1alpha/namespaces/kube-system/nodenetworkconfigs/${NODE_NAME}" \
+                2>/dev/null | grep -o '"primaryIP": *"[^"]*"' | head -1 | sed 's/.*: *"//; s/"//')
+              [ -n "$cidr" ] || { echo "no NNC primaryIP for $NODE_NAME yet (apiserver unreachable or NNC not ready); exiting to retry"; exit 1; }
+              printf '%s' "$cidr" > /work/podcidr
+              echo "discovered pod CIDR $cidr"
+          volumeMounts:
+            - { name: work, mountPath: /work }
+        # render both configs with sed (no gomplate): __ROUTER_ID__/__HOST_IP__ = the node IP
+        # (downward API), __POD_CIDR__ = the discovered /24. `|` is the sed delimiter (CIDRs have '/').
+        - name: prepare-config
+          image: "{{ .Values.system.frr.image }}"
+          env:
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          command:
+            - sh
+            - -c
+            - |
+              cp /config/daemons /etc/frr/daemons
+              sed -e "s|__ROUTER_ID__|${HOST_IP}|g" \
+                  -e "s|__POD_CIDR__|$(cat /work/podcidr)|g" \
+                  /config/speaker.conf.tpl > /etc/frr/frr.conf
+              sed -e "s|__HOST_IP__|${HOST_IP}|g" \
+                  /config/Corefile.tpl > /etc/coredns/Corefile
+          volumeMounts:
+            - { name: config, mountPath: /config, readOnly: true }
+            - { name: etc-frr, mountPath: /etc/frr }
+            - { name: coredns-conf, mountPath: /etc/coredns }
+            - { name: work, mountPath: /work }
+      containers:
+        - name: frr
+          image: "{{ .Values.system.frr.image }}"
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW", "NET_BIND_SERVICE", "SYS_ADMIN"]
+          command: ["sh", "-c", "exec /usr/lib/frr/docker-start"]
+          volumeMounts:
+            - { name: etc-frr, mountPath: /etc/frr }
+          resources:
+            {{- toYaml .Values.system.frr.resources | nindent 12 }}
+        - name: coredns
+          image: "{{ .Values.system.coredns.image }}"
+          args: ["-conf", "/etc/coredns/Corefile"]
+          ports:
+            - { containerPort: 53, name: dns, protocol: UDP }
+            - { containerPort: 53, name: dns-tcp, protocol: TCP }
+            - { containerPort: 9153, name: metrics, protocol: TCP }
+            - { containerPort: 8080, name: health, protocol: TCP }
+            - { containerPort: 8181, name: ready, protocol: TCP }
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 5
+          readinessProbe:
+            httpGet: { path: /ready, port: 8181 }
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              add: ["NET_BIND_SERVICE"]
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.system.coredns.resources | nindent 12 }}
+          volumeMounts:
+            - { name: coredns-conf, mountPath: /etc/coredns, readOnly: true }
+      volumes:
+        - name: config
+          configMap:
+            name: {{ .Release.Name }}
+        - name: etc-frr
+          emptyDir: {}
+        - name: coredns-conf
+          emptyDir: {}
+        - name: work
+          emptyDir: {}

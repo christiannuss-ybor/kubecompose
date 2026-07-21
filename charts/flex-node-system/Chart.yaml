@@ -1,0 +1,10 @@
+apiVersion: v2
+name: flex-node-system
+description: >-
+  System-side support for AKS Flex (cross-cloud) nodes, in one chart: a combined system-node pod
+  (FRR Route-Server relay + CoreDNS, hostNetwork, bound to the node IP) that flex nodes depend on,
+  plus a kube-proxy DaemonSet that runs on the flex nodes themselves. Merges the former bgp +
+  flex-kube-proxy charts.
+type: application
+version: 0.1.0
+appVersion: "1.33.8"

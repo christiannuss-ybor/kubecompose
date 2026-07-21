@@ -1,0 +1,4 @@
+# ybor-playground-dev-westus2 profile. Per-cluster knobs are top-level; routeServer defaults in
+# values.yaml already point at this cluster's RS.
+apiServerHost: "ybor-playground-dev-westus2-21x49g9f.hcp.westus2.azmk8s.io"
+dnsClusterIP: "10.0.0.11"   # free in the service CIDR (verified); flex nodes' --cluster-dns

@@ -1,6 +1,0 @@
-# ybor-playground-dev-westus2 (AKS) profile. apiServerHost = this cluster's apiserver FQDN.
-apiServerHost: "ybor-playground-dev-westus2-21x49g9f.hcp.westus2.azmk8s.io"
-
-coredns:
-  clusterIP: "10.0.0.11"   # free in the service CIDR (verified); flex nodes' --cluster-dns
-  # Node placement (exclude Karpenter nodes) is universal — see the default in values.yaml.

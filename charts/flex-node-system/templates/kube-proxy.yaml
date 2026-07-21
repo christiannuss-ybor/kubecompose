@@ -1,40 +1,16 @@
-# kube-proxy on flex nodes only (nodeSelector managed=false), programming the service DNAT
-# locally so in-cluster pods on the flex node can reach services. It dials the apiserver by
-# FQDN, NOT the 10.0.0.1 VIP it is about to program (chicken/egg); that FQDN is public and
-# reachable via the instance's default route.
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: {{ .Release.Name }}
-  namespace: {{ .Release.Namespace }}
-  labels:
-    app: {{ .Release.Name }}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ .Release.Name }}
-  labels:
-    app: {{ .Release.Name }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: system:node-proxier
-subjects:
-  - kind: ServiceAccount
-    name: {{ .Release.Name }}
-    namespace: {{ .Release.Namespace }}
----
+# kube-proxy on the flex nodes ONLY (nodeSelector managed=false): programs the service DNAT locally
+# so in-cluster pods on a flex node can reach ClusterIP services. Dials the apiserver by FQDN
+# (public, reachable via the node's default route), NOT the 10.0.0.1 VIP it is about to program.
+# Reuses the cilium ServiceAccount (kubeProxy.serviceAccountName) — no SA/RBAC created here.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .Release.Name }}
+  name: {{ .Release.Name }}-kube-proxy
   namespace: {{ .Release.Namespace }}
   labels:
-    app: {{ .Release.Name }}
+    app: {{ .Release.Name }}-kube-proxy
 data:
-  # Dial the apiserver by FQDN with the pod's SA token — not the 10.0.0.1 VIP kube-proxy is
-  # about to create.
+  # Dial the apiserver by FQDN with the pod's SA token — not the 10.0.0.1 VIP kube-proxy creates.
   kubeconfig.conf: |
     apiVersion: v1
     kind: Config
@@ -65,33 +41,33 @@ data:
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ .Release.Name }}
+  name: {{ .Release.Name }}-kube-proxy
   namespace: {{ .Release.Namespace }}
   labels:
-    app: {{ .Release.Name }}
+    app: {{ .Release.Name }}-kube-proxy
 spec:
   selector:
     matchLabels:
-      app: {{ .Release.Name }}
+      app: {{ .Release.Name }}-kube-proxy
   template:
     metadata:
       labels:
-        app: {{ .Release.Name }}
+        app: {{ .Release.Name }}-kube-proxy
     spec:
-      serviceAccountName: {{ .Release.Name }}
+      serviceAccountName: {{ required "kubeProxy.serviceAccountName is required" .Values.kubeProxy.serviceAccountName }}
       hostNetwork: true
       priorityClassName: system-node-critical
-      {{- with .Values.nodeSelector }}
+      {{- with .Values.kubeProxy.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.tolerations }}
+      {{- with .Values.kubeProxy.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: kube-proxy
-          image: "{{ .Values.image }}"
+          image: "{{ .Values.kubeProxy.image }}"
           command:
             - /usr/local/bin/kube-proxy
             - --config=/var/lib/kube-proxy/config.conf
@@ -108,11 +84,11 @@ spec:
             - { name: xtables-lock, mountPath: /run/xtables.lock }
             - { name: lib-modules, mountPath: /lib/modules, readOnly: true }
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            {{- toYaml .Values.kubeProxy.resources | nindent 12 }}
       volumes:
         - name: config
           configMap:
-            name: {{ .Release.Name }}
+            name: {{ .Release.Name }}-kube-proxy
         - name: xtables-lock
           hostPath:
             path: /run/xtables.lock

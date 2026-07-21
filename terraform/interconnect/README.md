@@ -12,7 +12,7 @@ nodes: the AKS **system** node's own pod `/24` (currently
 flex nodes can resolve DNS and reach the mesh. That single `/24` is
 originated by the in-cluster BGP relay to the Azure Route Server (it
 tracks whichever `/24` the system node holds, so it follows a node
-churn); see `routeserver.tf` and `charts/bgp`. Every other pod overlay (the rest of AKS `192.168/16`, the
+churn); see `routeserver.tf` and `charts/flex-node-system`. Every other pod overlay (the rest of AKS `192.168/16`, the
 flex-node CNI `172.20/24`) is deliberately not advertised and stays
 unreachable across the interconnect — full pod-to-pod was abandoned once
 DNS + mesh reachability was solved via that single `/24`.

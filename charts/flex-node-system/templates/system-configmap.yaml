@@ -1,0 +1,96 @@
+# Rendered at two levels: helm fills the static knobs (ASN, RS peers) at package time; the
+# prepare-config init container then sed-substitutes the per-node values at pod start —
+# __ROUTER_ID__ / __HOST_IP__ (both the node IP, from the downward API) and __POD_CIDR__ (the /24
+# discover-podcidr read from NodeNetworkConfig). Placeholders are __UPPERCASE__ so they never
+# collide with helm's Go-template braces.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}
+data:
+  daemons: |
+    # FRR daemons to launch. zebra always runs; we only add bgpd.
+    bgpd=yes
+    ospfd=no
+    ospf6d=no
+    ripd=no
+    ripngd=no
+    isisd=no
+    pimd=no
+    pim6d=no
+    ldpd=no
+    nhrpd=no
+    eigrpd=no
+    babeld=no
+    sharpd=no
+    pbrd=no
+    bfdd=no
+    fabricd=no
+    vrrpd=no
+    pathd=no
+
+    vtysh_enable=yes
+    zebra_options="  -A 127.0.0.1 -s 90000000"
+    bgpd_options="   -A 127.0.0.1"
+  # FRR relay: advertise THIS node's own pod /24 (__POD_CIDR__) to the Route Server over eBGP,
+  # next-hop left as the node IP (__ROUTER_ID__) so the RS injects "that /24 -> this node" into the
+  # VNet. RS-OUT is a belt-and-suspenders filter: only an AKS pod /24 may leave toward the RS. No
+  # iBGP mesh — the relay peers nothing but the Route Server.
+  speaker.conf.tpl: |
+    frr defaults traditional
+    log stdout
+    !
+    ! only an AKS pod /24 may be advertised to the Route Server (its next-hop is this in-VNet
+    ! system node); nothing else should ever leak toward the RS.
+    ip prefix-list RS-PODS seq 5 permit 192.168.0.0/16 le 24
+    route-map RS-OUT permit 10
+     match ip address prefix-list RS-PODS
+    !
+    router bgp {{ .Values.asn }}
+     bgp router-id __ROUTER_ID__
+     no bgp ebgp-requires-policy
+     no bgp network import-check
+    {{- range .Values.routeServer.addresses }}
+     neighbor {{ . }} remote-as {{ $.Values.routeServer.asn }}
+     neighbor {{ . }} ebgp-multihop
+    {{- end }}
+     !
+     address-family ipv4 unicast
+      network __POD_CIDR__
+    {{- range .Values.routeServer.addresses }}
+      neighbor {{ . }} activate
+      neighbor {{ . }} attribute-unchanged next-hop
+      neighbor {{ . }} route-map RS-OUT out
+    {{- end }}
+     exit-address-family
+    !
+    line vty
+  # CoreDNS: mirrors the managed AKS Corefile minus `import custom/*` (needs AKS's coredns-custom
+  # ConfigMap) and the internal.cloudapp.net/reddog NXDOMAIN templates — PLUS `bind __HOST_IP__`.
+  # The pod is hostNetwork (FRR needs it), so CoreDNS MUST bind the node IP specifically: a wildcard
+  # :53 would collide with systemd-resolved's 127.0.0.53:53 on the node. Binding the node IP makes
+  # the Service endpoints the node IP, so flex nodes reach DNS over the node-to-node VPN. Answers
+  # cluster.local from an apiserver watch (kubernetes plugin), so it needs no in-cluster reachability.
+  Corefile.tpl: |
+    .:53 {
+        bind __HOST_IP__
+        errors
+        health {
+          lameduck 5s
+        }
+        ready
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
+          pods insecure
+          fallthrough in-addr.arpa ip6.arpa
+          ttl 30
+        }
+        prometheus :9153
+        forward . /etc/resolv.conf
+        cache 30
+        loop
+        reload
+        loadbalance
+    }
