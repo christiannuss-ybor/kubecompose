@@ -1,7 +1,8 @@
-# Two-level templating: helm renders the static knobs (ASN) at package
-# time; gomplate renders the per-node values at pod start (custom [[ ]] delimiters, so
-# helm and gomplate never collide) — .Env.HOST_IP (downward API) and the pod CIDR read
-# from the /work/podcidr datasource that discover-podcidr wrote from NodeNetworkConfig.
+# Two-level templating: helm renders the static knobs (ASN, RS peers) at package time; the
+# prepare-config init container then sed-substitutes the two per-node values at pod start —
+# __ROUTER_ID__ (HOST_IP, downward API) and __POD_CIDR__ (the /24 discover-podcidr wrote to
+# /work/podcidr from NodeNetworkConfig). Placeholders are __UPPERCASE__ so they never collide
+# with helm's Go-template braces.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -34,49 +35,38 @@ data:
     vtysh_enable=yes
     zebra_options="  -A 127.0.0.1 -s 90000000"
     bgpd_options="   -A 127.0.0.1"
-  # the node speaker: a BGP router advertising this node's pod CIDR and peering every other node
-  # discovered into /work/neighbors.json (iBGP — shared .Values.asn). On the RELAY node (the pod
-  # whose HOST_IP == .Values.relay.nodeIP) it ALSO eBGP-peers the Azure Route Server and re-
-  # advertises the mesh's per-node /24s with next-hop preserved (attribute-unchanged), filtered to
-  # the AKS pod aggregate — so the RS injects each /24 -> its owning node and advertises to AWS.
+  # The system-node relay: a BGP router that advertises THIS node's own pod /24 (from
+  # /work/podcidr, discovered from NodeNetworkConfig — e.g. 192.168.6.0/24) to the Azure Route
+  # Server over eBGP, next-hop left as this node's underlay IP so the RS injects "that /24 -> this
+  # node" into the VNet (and the VPN gateway carries it to AWS). RS-OUT is a belt-and-suspenders
+  # filter: only an AKS pod /24 may ever leave toward the RS. No iBGP mesh and no neighbor
+  # discovery — full pod-to-pod is abandoned, so this speaker peers nothing but the Route Server.
   speaker.conf.tpl: |
     frr defaults traditional
     log stdout
     !
-    [[- if eq .Env.HOST_IP "{{ .Values.relay.nodeIP }}" ]]
-    ! relay: only the AKS pod /24s (next-hops are in-VNet AKS node IPs) go to the Route Server;
-    ! the flex /25s are excluded (their next-hop is an AWS IP, not routable in the VNet).
+    ! only an AKS pod /24 may be advertised to the Route Server (its next-hop is this in-VNet
+    ! system node); nothing else should ever leak toward the RS.
     ip prefix-list RS-PODS seq 5 permit 192.168.0.0/16 le 24
     route-map RS-OUT permit 10
      match ip address prefix-list RS-PODS
     !
-    [[- end ]]
     router bgp {{ .Values.asn }}
-     bgp router-id [[ .Env.HOST_IP ]]
+     bgp router-id __ROUTER_ID__
      no bgp ebgp-requires-policy
      no bgp network import-check
-    [[- range (ds "neighbors") ]]
-     neighbor [[ . ]] remote-as {{ .Values.asn }}
-    [[- end ]]
-    [[- if eq .Env.HOST_IP "{{ .Values.relay.nodeIP }}" ]]
     {{- range .Values.relay.routeServerAddresses }}
      neighbor {{ . }} remote-as {{ $.Values.relay.routeServerAsn }}
      neighbor {{ . }} ebgp-multihop
     {{- end }}
-    [[- end ]]
      !
      address-family ipv4 unicast
-      network [[ (ds "podcidr") | strings.TrimSpace ]]
-    [[- range (ds "neighbors") ]]
-      neighbor [[ . ]] activate
-    [[- end ]]
-    [[- if eq .Env.HOST_IP "{{ .Values.relay.nodeIP }}" ]]
+      network __POD_CIDR__
     {{- range .Values.relay.routeServerAddresses }}
       neighbor {{ . }} activate
       neighbor {{ . }} attribute-unchanged next-hop
       neighbor {{ . }} route-map RS-OUT out
     {{- end }}
-    [[- end ]]
      exit-address-family
     !
     line vty

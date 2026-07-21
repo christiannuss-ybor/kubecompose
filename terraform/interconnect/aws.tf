@@ -75,18 +75,20 @@ resource "aws_vpn_connection" "azure" {
 
 # VPC -> Azure over the VPN: the VPC (incl. the flex EC2) reaches the Azure VNet address space
 # (AKS nodes, 10.224.0.0/12) via the TGW, which learns it over BGP from the Azure VPN gateway.
-# Node-to-node only: the AKS pod overlay (192.168/16) and the flex CNI (172.20/24) are never
-# advertised, so they stay unreachable across the interconnect by design.
 resource "aws_route" "aks_nodes_via_tgw" {
   route_table_id         = data.aws_route_table.main.id
   destination_cidr_block = var.azure_vnet_cidr
   transit_gateway_id     = aws_ec2_transit_gateway.this.id
 }
 
-# VPC -> AKS pods over the VPN (forward-path datapath). The TGW now learns the per-node pod /24s
-# over BGP (relay -> Route Server -> VPN gateway), so send the pod aggregate to the TGW; it
-# forwards each /24 down the VPN, and Azure (RS-injected VNet routes) delivers to the owning node.
-# Without this, 192.168.x from the flex node hits the default route (IGW) and is dropped.
+# VPC -> AKS pods over the VPN (forward-path datapath for flex-node DNS + service mesh). The relay
+# originates the system node's own /24 to the Route Server, which injects it into the VNet
+# (next-hop=that node) and the VPN gateway advertises it to the TGW; this route sends pod-bound
+# traffic down the VPN. Without it, 192.168.x from the flex node hits the default route (IGW) and
+# is dropped. Deliberately the full /16, not the single system /24: AKS scatters per-node /24s
+# across the /16 and the system node can churn to a new one, so the broad route stays valid with
+# no re-apply. Only the RS-injected /24 is actually reachable (the system node's NIC forwards;
+# other nodes' NICs do not), so the aggregate re-exposes nothing.
 resource "aws_route" "aks_pods_via_tgw" {
   route_table_id         = data.aws_route_table.main.id
   destination_cidr_block = var.aks_pod_cidr

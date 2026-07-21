@@ -246,23 +246,11 @@ resource "aws_security_group" "this" {
   }
 }
 
-# Deterministic ENIs: minted here (not auto-created by the instances) so their IDs + private IPs
-# stay stable across instance rebuilds — the interconnect TGW attachment doesn't churn, and each
-# flex node keeps the same private IP / node name. src/dst check off (flex pods carry their own
-# CIDR, so the instance forwards non-own-IP packets). One per pod CIDR in var.flex_pod_cidrs.
-resource "aws_network_interface" "flex" {
-  count             = length(var.flex_pod_cidrs)
-  subnet_id         = sort(data.aws_subnets.default.ids)[0]
-  security_groups   = [aws_security_group.this.id]
-  source_dest_check = false
-
-  tags = {
-    Name = "${var.name_prefix}-flex-eni-${count.index}"
-  }
-}
-
-# An explicit primary ENI doesn't get the subnet's auto-assigned public IP, so pin an EIP per
-# node for SSH (also stable across rebuilds).
+# Stable EIP per flex node for SSH. There's no reserved ENI anymore — it only existed for the
+# abandoned pod-routing return path plus node-identity, and we accept identity churn now — so the
+# instances use the default subnet's auto-created primary ENI. Their private IPs / node names
+# therefore change on each rebuild; the EIP is the one address that stays put, re-associated to
+# the fresh instance. (Refresh known_hosts after a rebuild: the host key changes regardless.)
 resource "aws_eip" "flex" {
   count  = length(var.flex_pod_cidrs)
   domain = "vpc"
@@ -273,24 +261,22 @@ resource "aws_eip" "flex" {
 }
 
 resource "aws_eip_association" "flex" {
-  count                = length(var.flex_pod_cidrs)
-  allocation_id        = aws_eip.flex[count.index].id
-  network_interface_id = aws_network_interface.flex[count.index].id
+  count         = length(var.flex_pod_cidrs)
+  allocation_id = aws_eip.flex[count.index].id
+  instance_id   = aws_instance.this[count.index].id
 }
 
 resource "aws_instance" "this" {
-  count         = length(var.flex_pod_cidrs)
-  ami           = data.aws_ami.ubuntu.id
-  instance_type = var.instance_type
-  key_name      = aws_key_pair.this.key_name
+  count                  = length(var.flex_pod_cidrs)
+  ami                    = data.aws_ami.ubuntu.id
+  instance_type          = var.instance_type
+  key_name               = aws_key_pair.this.key_name
+  subnet_id              = sort(data.aws_subnets.default.ids)[0]
+  vpc_security_group_ids = [aws_security_group.this.id]
 
-  network_interface {
-    network_interface_id = aws_network_interface.flex[count.index].id
-    device_index         = 0
-  }
-
-  # Bootstrap the AKS Flex Node via cloud-init; a config change rebuilds the instance
-  # (the ENI + EIP persist, so the flex node's identity is stable).
+  # Bootstrap the AKS Flex Node via cloud-init; a config change rebuilds the instance. The EIP is
+  # re-associated to the replacement, but the primary ENI is auto-created per instance now, so the
+  # private IP + node name change on each rebuild (leaving a stale NotReady Node to clean up).
   user_data                   = local.cloud_init[count.index]
   user_data_replace_on_change = true
 
@@ -304,13 +290,7 @@ resource "aws_instance" "this" {
   }
 }
 
-# Preserve node 0's stable ENI/EIP identity when the module went single-instance -> count[0]
-# (so the first flex node isn't destroyed/recreated with a new private IP + node name).
-moved {
-  from = aws_network_interface.flex
-  to   = aws_network_interface.flex[0]
-}
-
+# Preserve node 0's EIP + instance addresses from when the module went single-instance -> count[0].
 moved {
   from = aws_eip.flex
   to   = aws_eip.flex[0]
@@ -331,20 +311,10 @@ output "public_ips" {
 }
 
 output "private_ips" {
-  value = aws_network_interface.flex[*].private_ip
-}
-
-output "eni_ids" {
-  description = "Deterministic ENIs, one per flex node; stable across rebuilds."
-  value       = aws_network_interface.flex[*].id
+  value = aws_instance.this[*].private_ip
 }
 
 output "subnet_id" {
-  description = "ENI subnet — used for the TGW VPC attachment (all nodes share one subnet)."
-  value       = aws_network_interface.flex[0].subnet_id
-}
-
-output "flex_pod_cidrs" {
-  description = "Per-node flex pod CIDRs (index-aligned with eni_ids), for the interconnect return-path routes."
-  value       = var.flex_pod_cidrs
+  description = "Subnet shared by the flex instances — used for the TGW VPC attachment."
+  value       = sort(data.aws_subnets.default.ids)[0]
 }

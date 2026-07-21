@@ -1,51 +1,52 @@
-# Per-node FRR BGP speaker (DaemonSet) for Kubernetes — advertises each node's pod CIDR
-# to an external route server (e.g. Azure Route Server), so the pod network becomes
-# routable off-cluster. Pod CIDR is discovered from Azure's NodeNetworkConfig.
+# FRR BGP relay speaker (DaemonSet, pinned to the AKS SYSTEM node only) for AKS — advertises that
+# node's own pod /24 to an external route server (the Azure Route Server) so CoreDNS + istiod
+# become reachable off-cluster (the flex nodes, over the VPN). Pod CIDR is discovered from Azure's
+# NodeNetworkConfig. No iBGP mesh: full pod-to-pod was abandoned, so the speaker peers only the RS.
 #
-# (An earlier version also shipped an in-cluster "built-in" route server for the docker
-# lab; that's been removed pending a rethink — this chart is currently AKS-shaped.)
+# (An earlier version ran on every node and peered a full iBGP mesh, re-advertising all per-node
+# /24s; that scaffolding was pruned once flex-node DNS + mesh worked off the single system /24.)
 
-asn: 65001                       # ASN shared by the node speakers
+asn: 65001                       # the relay speaker's ASN (eBGP to the Route Server)
 
-# The speaker runs as a DaemonSet on every node. No affinity, and a blanket `operator: Exists`
-# toleration so it tolerates ALL taints — the AKS system node (CriticalAddonsOnly) and the flex
-# EC2 nodes (flexnode=true:NoSchedule) included.
 speaker:
-  # rollout speed: how many pods update at once (k8s DaemonSet default is 1). "100%" = all at
-  # once (brief full restart, fine for these non-critical speakers); dial down (e.g. "25%")
-  # for a gentler roll.
+  # rollout speed: how many pods update at once. With the system-node pin this is a single pod
+  # anyway, so "100%" is a brief single restart (fine for this non-critical speaker).
   maxUnavailable: "100%"
+  # Pin to the system VMSS node: nodeAffinity requires this label be ABSENT — it's present on every
+  # Karpenter node, absent on the system VMSS pool AND on flex nodes. Flex nodes are then excluded
+  # by their untolerated flexnode taint (we tolerate only CriticalAddonsOnly). Mirrors the
+  # flex-kube-proxy CoreDNS placement so the relay lands on the same node as the pods it advertises.
+  excludeKarpenterLabelKey: karpenter.sh/nodepool
   tolerations:
-    - operator: Exists
+    - key: CriticalAddonsOnly    # system VMSS node taint
+      operator: Exists
 
-# Relay: designate ONE node (by IP) whose speaker ALSO peers the Azure Route Server and
-# re-advertises the mesh-learned per-node pod /24s with next-hops preserved (attribute-unchanged),
-# so the RS injects them into the VNet + advertises to AWS. Hardcoded IP — each speaker pod
-# self-identifies by matching its own HOST_IP (downward API) against relay.nodeIP; only the match
-# gets the RS config, so the RS sees 1 peer, not 20. Empty nodeIP disables the relay role.
-# Only AKS pod /24s (192.168.0.0/16 le 24) are advertised to the RS — flex /25s are filtered out
-# (their next-hop is an AWS IP, not routable in the VNet). Keep in sync with terraform relay_peer_ip.
+# Route Server peering: the relay eBGP-peers the Azure Route Server and advertises the system
+# node's own /24 (next-hop preserved = this node), so the RS injects it into the VNet + advertises
+# to AWS. Only an AKS pod /24 (192.168.0.0/16 le 24) can leave toward the RS (the RS-OUT filter).
+# The RS BGP connection peers this node BY IP on the terraform side, so keep terraform's
+# relay_peer_ip pointed at the system node's IP — the chart itself no longer needs that IP (it
+# lands on the node via the affinity above, not by matching HOST_IP).
 relay:
-  nodeIP: "10.224.0.108"           # stable system-node IP (aks-systemd4psv6-...-vmss000049)
   routeServerAsn: 65515
   routeServerAddresses:
     - 10.225.255.36
     - 10.225.255.37
 
-# debug: true adds a gcr.io/cnuss/dev sidecar (sleep infinity) to each speaker pod, sharing the
-# pod netns + the config/etc-frr/work volumes and the frr caps — exec in to poke at BGP,
-# the rendered frr.conf, and the discovered pod CIDR. Hardcoded on for now (bring-up debugging).
-debug: true
+# debug: true adds a gcr.io/cnuss/dev sidecar (sleep infinity) to the speaker pod, sharing the
+# pod netns + the config/etc-frr/work volumes and the frr caps — exec in to poke at BGP, the
+# rendered frr.conf, and the discovered pod CIDR. Off by default: it's a moving :latest tag
+# (imagePullPolicy Always), so leaving it on makes every relay restart depend on a re-pull through
+# the node's registry mirror. Flip on only for hands-on bring-up debugging.
+debug: false
 
-# Single-purpose tool images. Repositories are hardcoded in the templates
-# (quay.io/frrouting/frr, gcr.io/gomplate/gomplate, and gcr.io/bitnami/kubectl:latest for the NNC
-# lookup — Bitnami moved version tags behind Bitnami Secure Images, so kubectl has no
-# knob). Bump the versions here.
+# The frr image is the ONLY image the relay uses — the init containers run on it too (busybox
+# wget reads NodeNetworkConfig, sed renders frr.conf), so a restart never pulls a throwaway tool
+# image (no more gcr.io/bitnami/kubectl or gomplate). Keeping the pull surface to this one image
+# means a relay restart only depends on the image the frr container needs anyway. Bump here.
 tooling:
   frr:
     version: "10.2.1"
-  gomplate:
-    version: "stable"
 
 resources:
   requests:

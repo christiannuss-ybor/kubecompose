@@ -17,22 +17,6 @@ variable "flex_ec2_subnet_id" {
   type        = string
 }
 
-variable "flex_ec2_eni_ids" {
-  description = "ENI IDs of the flex nodes (from the ec2 module), index-aligned with flex_pod_cidrs — returning flex-pod traffic is routed to these in the VPC route table."
-  type        = list(string)
-}
-
-variable "flex_pod_cidrs" {
-  description = "Per-node flex pod CIDRs (from the ec2 module), index-aligned with flex_ec2_eni_ids."
-  type        = list(string)
-}
-
-variable "flex_pod_supernet" {
-  description = "Flex pod aggregate advertised to Azure via the TGW (covers all per-node flex /25s)."
-  type        = string
-  default     = "172.20.0.0/24"
-}
-
 # --- Azure ---
 
 variable "azure_resource_group_name" {
@@ -54,7 +38,7 @@ variable "azure_vnet_cidr" {
 }
 
 variable "aks_pod_cidr" {
-  description = "AKS pod overlay aggregate, routed VPC -> TGW so the flex node reaches AKS pods (the TGW learns the per-node /24s over BGP via the Route Server)."
+  description = "AKS pod overlay aggregate, routed VPC -> TGW so the flex node can reach the AKS pods it needs (CoreDNS + istiod, on the system node). Kept as the full /16 on purpose, NOT narrowed to the system node's single /24: AKS scatters per-node /24s unpredictably across the /16 and the system node can churn to a new one, so a /16 route stays valid with no re-apply. Only the /24 the Route Server actually injects (the system node's own, next-hop=that node) is reachable anyway — every other /24 black-holes at Azure by design (those node NICs lack IP-forwarding), so the broad route re-exposes nothing."
   type        = string
   default     = "192.168.0.0/16"
 }

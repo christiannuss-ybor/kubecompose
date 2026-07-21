@@ -5,10 +5,17 @@ existing Azure VNet. No native peering exists between AWS and Azure, so
 this uses each cloud's managed VPN gateway with dynamic routing — routes
 propagate automatically in both directions.
 
-Only node/subnet ranges cross the link: the AWS VPC CIDR and the Azure
-VNet address space. Pod overlays (AKS 192.168/16, flex-node CNI
-172.20/24) are deliberately not advertised, so they are unreachable
-across the interconnect.
+Node/subnet ranges cross the link automatically (the AWS VPC CIDR and
+the Azure VNet address space), plus one narrow exception for the flex
+nodes: the AKS **system** node's own pod `/24` (currently
+`192.168.6.0/24`, where CoreDNS + istiod run) is advertised to AWS so
+flex nodes can resolve DNS and reach the mesh. That single `/24` is
+originated by the in-cluster BGP relay to the Azure Route Server (it
+tracks whichever `/24` the system node holds, so it follows a node
+churn); see `routeserver.tf` and `charts/bgp`. Every other pod overlay (the rest of AKS `192.168/16`, the
+flex-node CNI `172.20/24`) is deliberately not advertised and stays
+unreachable across the interconnect — full pod-to-pod was abandoned once
+DNS + mesh reachability was solved via that single `/24`.
 
 ```
  AWS default VPC                                Azure VNet
