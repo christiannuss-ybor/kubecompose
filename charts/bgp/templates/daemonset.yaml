@@ -55,9 +55,9 @@ spec:
         # flex EC2 nodes) fall back to the flex.azure.com/pod-{network,prefix} labels set at
         # registration. Exits non-zero until a CIDR resolves; the kubelet restarts it until it does.
         - name: discover-podcidr
-          # bitnami/kubectl (Debian, has a shell). Pinned to :latest — Bitnami moved
+          # gcr.io/bitnami/kubectl (Debian, has a shell). Pinned to :latest — Bitnami moved
           # version-tagged images behind Bitnami Secure Images; latest stays public.
-          image: "bitnami/kubectl:latest"
+          image: "gcr.io/bitnami/kubectl:latest"
           env:
             - name: NODE_NAME
               valueFrom:
@@ -86,7 +86,7 @@ spec:
         # dropped by node name. Best-effort: an empty list is valid (a router with no neighbors),
         # and the set is fixed at pod start (nodes added later need a pod restart to be picked up).
         - name: discover-neighbors
-          image: "bitnami/kubectl:latest"
+          image: "gcr.io/bitnami/kubectl:latest"
           env:
             - name: NODE_NAME
               valueFrom:
@@ -113,7 +113,7 @@ spec:
         # from env, pod CIDR from /work/podcidr, neighbors from /work/neighbors.json — if podcidr
         # is missing gomplate errors and the init restarts.
         - name: prepare-config
-          image: "gomplate/gomplate:{{ .Values.tooling.gomplate.version }}"
+          image: "gcr.io/gomplate/gomplate:{{ .Values.tooling.gomplate.version }}"
           env:
             - name: HOST_IP
               valueFrom:
@@ -150,9 +150,9 @@ spec:
         {{- if .Values.debug }}
         # debug sidecar: shares the pod netns + volumes + caps. Exec in to inspect BGP,
         # the rendered /etc/frr/frr.conf, and /work/podcidr. imagePullPolicy Always since
-        # cnuss/dev:latest is a moving tag.
+        # gcr.io/cnuss/dev:latest is a moving tag.
         - name: debug
-          image: "cnuss/dev:latest"
+          image: "gcr.io/cnuss/dev:latest"
           imagePullPolicy: Always
           command: ["sleep", "infinity"]
           securityContext:

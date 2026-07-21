@@ -32,13 +32,13 @@ relay:
     - 10.225.255.36
     - 10.225.255.37
 
-# debug: true adds a cnuss/dev sidecar (sleep infinity) to each speaker pod, sharing the
+# debug: true adds a gcr.io/cnuss/dev sidecar (sleep infinity) to each speaker pod, sharing the
 # pod netns + the config/etc-frr/work volumes and the frr caps — exec in to poke at BGP,
 # the rendered frr.conf, and the discovered pod CIDR. Hardcoded on for now (bring-up debugging).
 debug: true
 
 # Single-purpose tool images. Repositories are hardcoded in the templates
-# (quay.io/frrouting/frr, gomplate/gomplate, and bitnami/kubectl:latest for the NNC
+# (quay.io/frrouting/frr, gcr.io/gomplate/gomplate, and gcr.io/bitnami/kubectl:latest for the NNC
 # lookup — Bitnami moved version tags behind Bitnami Secure Images, so kubectl has no
 # knob). Bump the versions here.
 tooling:
