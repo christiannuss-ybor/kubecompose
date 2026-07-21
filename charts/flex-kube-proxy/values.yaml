@@ -20,3 +20,27 @@ resources:
     memory: 32Mi
   limits:
     memory: 128Mi
+
+# Self-hosted CoreDNS pinned to the reachable managed system pool, fronted by a pinned ClusterIP
+# the flex nodes use as --cluster-dns (see templates/coredns.yaml). Set clusterIP + nodeSelector
+# per cluster in a values-<cluster>.yaml overlay.
+coredns:
+  enabled: true
+  image: mcr.microsoft.com/oss/v2/kubernetes/coredns:v1.12.1-19   # matches managed AKS CoreDNS
+  replicas: 2
+  clusterIP: ""          # REQUIRED per cluster; must be a free IP in the service CIDR
+  # CoreDNS must run only on nodes a flex node can reach = nodes NOT provisioned by Karpenter
+  # (Karpenter/NAP node NICs lack enableIpForwarding, so raw overlay-dst packets are dropped).
+  # Scheduled via nodeAffinity DoesNotExist on this label — present on every Karpenter node,
+  # absent on the managed system VMSS pool. Do NOT gate on kubernetes.azure.com/mode=system:
+  # Karpenter's "default" pool also carries mode=system yet is unreachable.
+  excludeKarpenterLabelKey: karpenter.sh/nodepool
+  tolerations:
+    - key: CriticalAddonsOnly   # system VMSS node taint
+      operator: Exists
+  resources:
+    requests:
+      cpu: 100m
+      memory: 70Mi
+    limits:
+      memory: 170Mi

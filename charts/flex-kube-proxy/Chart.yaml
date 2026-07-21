@@ -1,12 +1,12 @@
 apiVersion: v2
 name: flex-kube-proxy
 description: >-
-  kube-proxy for AKS Flex Nodes. The cluster runs Cilium kube-proxy-replacement (no
-  kube-proxy DaemonSet) and flex nodes run neither Cilium nor kube-proxy, so Kubernetes
-  service VIPs (10.0.0.1 apiserver, 10.0.0.10 kube-dns, ...) don't resolve on a flex node.
-  This chart runs kube-proxy on flex nodes only (nodeSelector kubernetes.azure.com/managed=false),
-  programming the service DNAT locally. Extracted from the bgp chart, which is being
-  retired in favour of MetalLB for service-VIP advertisement (YP6M-3017).
+  Flex-node cluster-networking helpers (rebrand pending). (1) kube-proxy on flex nodes only
+  (nodeSelector kubernetes.azure.com/managed=false), programming service DNAT locally since the
+  cluster runs Cilium kube-proxy-replacement and flex nodes run neither Cilium nor kube-proxy.
+  (2) A self-hosted CoreDNS pinned to the reachable managed system VMSS pool, fronted by a pinned
+  ClusterIP the flex nodes use as --cluster-dns — the managed kube-dns endpoints spread onto
+  Karpenter nodes that a cross-cloud flex node can't reach (no NIC IP-forwarding).
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "1.33.8"
