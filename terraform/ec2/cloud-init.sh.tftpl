@@ -29,8 +29,9 @@ chmod 600 /etc/aks-flex-node/config.json
 mkdir -p /var/lib/machines/kube1/var/lib/containerd/io.containerd.content.v1.content
 
 # DIY bridge CNI: wait for kube1's cni dir, then drop the conflist (also rendered by
-# jsonencode). Pod CIDR is a slice AWS routes to this instance via the TGW; ipMasq off
-# preserves pod-IP identity across the WAN.
+# jsonencode). Pod CIDR is a slice AWS routes to this instance via the TGW; ipMasq on SNATs pod
+# egress to the node IP so pod->internet traverses the IGW (cross-cloud pod-to-pod, which wanted
+# pod-IP identity across the WAN, is abandoned).
 for _ in $(seq 1 60); do
   [ -d /var/lib/machines/kube1/etc/cni/net.d ] && break
   sleep 5

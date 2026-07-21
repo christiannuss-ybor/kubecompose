@@ -182,10 +182,14 @@ locals {
         name       = "flexnet"
         plugins = [
           {
-            type        = "bridge"
-            bridge      = "cni0"
-            isGateway   = true
-            ipMasq      = false
+            type      = "bridge"
+            bridge    = "cni0"
+            isGateway = true
+            # SNAT pod egress to the node IP so pod->internet traverses the IGW (which only NATs the
+            # node's own IP, not the 172.20.x pod IP). Was false to preserve pod-IP identity across
+            # the WAN for cross-cloud pod-to-pod, but that's abandoned; service/DNS traffic is already
+            # SNAT'd by kube-proxy, so this only newly affects internet egress.
+            ipMasq      = true
             hairpinMode = true
             ipam = {
               type   = "host-local"
