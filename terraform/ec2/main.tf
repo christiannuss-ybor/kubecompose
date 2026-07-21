@@ -79,9 +79,9 @@ variable "k8s_version" {
 }
 
 variable "dns_service_ip" {
-  description = "Cluster DNS service IP."
+  description = "Cluster DNS the flex nodes use as --cluster-dns. Points at the flex-kube-proxy chart's system-node-pinned CoreDNS VIP (10.0.0.11), NOT the cluster-wide kube-dns (10.0.0.10) — kube-dns endpoints spread onto Karpenter nodes whose NICs lack IP-forwarding and are unreachable from a flex node. Per-node kubelet flag, so the rest of the cluster is unaffected."
   type        = string
-  default     = "10.0.0.10"
+  default     = "10.0.0.11"
 }
 
 variable "flex_pod_cidrs" {
