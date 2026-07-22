@@ -100,3 +100,67 @@ data:
         reload
         loadbalance
     }
+  {{- if .Values.system.headscale.enabled }}
+  # Headscale control-server config for the cross-cloud WireGuard overlay (YP6M-3040). Rendered by
+  # prepare-config, which seds __HOST_IP__ (the node IP) into server_url + the listen addrs so the
+  # server rides the node-to-node VPN and flex nodes can register in a later iteration. Schema tracks
+  # headscale v0.29.2 (config-example.yaml). ITERATION 1: run `serve` — no TLS / pre-auth keys / agents.
+  headscale.yaml.tpl: |
+    server_url: http://__HOST_IP__:{{ .Values.system.headscale.httpPort }}
+    listen_addr: __HOST_IP__:{{ .Values.system.headscale.httpPort }}
+    metrics_listen_addr: __HOST_IP__:{{ .Values.system.headscale.metricsPort }}
+    grpc_listen_addr: __HOST_IP__:{{ .Values.system.headscale.grpcPort }}
+    grpc_allow_insecure: false
+
+    noise:
+      private_key_path: /var/lib/headscale/noise_private.key
+
+    # Tailnet address pool (the 100.x overlay IPs headscale hands nodes) — distinct from the pod
+    # CIDRs those nodes will later advertise as subnet routes. Defaults are fine.
+    prefixes:
+      v4: 100.64.0.0/10
+      v6: fd7a:115c:a1e0::/48
+      allocation: sequential
+
+    # Headscale refuses to start with an empty DERPMap. Rather than phone home to Tailscale's public
+    # relays (derp.urls), run the EMBEDDED DERP: automatically_add_embedded_derp_region builds one
+    # region from server_url (the node IP). We have direct node-IP reachability over the VPN, so DERP
+    # never actually relays data — this just satisfies the startup check and bootstraps peers.
+    derp:
+      server:
+        enabled: true
+        region_id: 999
+        region_code: headscale
+        region_name: "Headscale Embedded DERP"
+        stun_listen_addr: "0.0.0.0:3478"
+        private_key_path: /var/lib/headscale/derp_server_private.key
+        automatically_add_embedded_derp_region: true
+      urls: []
+      paths: []
+      auto_update_enabled: false
+      update_frequency: 24h
+
+    disable_check_updates: true
+
+    node:
+      ephemeral:
+        inactivity_timeout: 30m
+
+    database:
+      type: sqlite
+      sqlite:
+        path: /var/lib/headscale/db.sqlite
+        write_ahead_log: true
+
+    # MagicDNS off: flex nodes already use this chart's CoreDNS (--cluster-dns 10.0.0.100); we don't
+    # want headscale pushing its own resolver to clients.
+    dns:
+      magic_dns: false
+      base_domain: flex.ybor.internal
+      override_local_dns: false
+      nameservers:
+        global: []
+
+    log:
+      level: info
+  {{- end }}
