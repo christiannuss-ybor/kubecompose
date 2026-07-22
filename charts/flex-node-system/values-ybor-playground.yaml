@@ -1,4 +1,11 @@
-# ybor-playground-dev-westus2 profile. Per-cluster knobs are top-level; routeServer defaults in
-# values.yaml already point at this cluster's RS.
+# ybor-playground-dev-westus2 profile — the AWS+VPN stand-in, which DOES have an Azure Route Server.
 apiServerHost: "ybor-playground-dev-westus2-21x49g9f.hcp.westus2.azmk8s.io"
 dnsClusterIP: "10.0.0.11"   # free in the service CIDR (verified); flex nodes' --cluster-dns
+
+# FRR relay ON — this cluster has an Azure Route Server to peer (unlike the on-prem default).
+asn: 65001
+routeServer:
+  asn: 65515                # Azure Route Server ASN (Azure's default)
+  addresses:                # this cluster's RS virtualRouterIps
+    - 10.225.255.36
+    - 10.225.255.37

@@ -16,9 +16,10 @@ spec:
   ports:
     - { name: dns, port: 53, targetPort: 53, protocol: UDP }
     - { name: dns-tcp, port: 53, targetPort: 53, protocol: TCP }
+{{- if (include "flex-node-system.frrEnabled" .) }}
 ---
 # Headless Service over the FRR relay's :179 — no VIP; resolves to the relay node IP(s) (hostNetwork
-# endpoints) for observability / peer inspection. Not on the datapath.
+# endpoints) for observability / peer inspection. Not on the datapath. Only when the relay is enabled.
 apiVersion: v1
 kind: Service
 metadata:
@@ -33,3 +34,4 @@ spec:
     app: {{ .Release.Name }}
   ports:
     - { name: bgp, port: 179, targetPort: 179, protocol: TCP }
+{{- end }}

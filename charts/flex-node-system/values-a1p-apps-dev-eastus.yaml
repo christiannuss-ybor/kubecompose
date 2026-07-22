@@ -1,0 +1,32 @@
+# a1p-apps-dev-eastus profile — customer (AFI) pilot target for an on-prem AKS flex node.
+#
+# Cluster network profile (read-only recon 2026-07-22, Azure Resource Graph — YP6M-2839):
+#   networkPlugin=azure  mode=overlay  policy=cilium   (IDENTICAL to the ybor-playground stand-in)
+#   podCidr     192.168.0.0/16   -> clusterCidr below (== chart default; no real override needed)
+#   serviceCidr 10.0.0.0/16
+#   kube-dns    10.0.0.10        -> the decoupled CoreDNS takes a DIFFERENT free IP (10.0.0.11)
+#   fqdn        a1p-apps-dev-eastus-f974fq43.hcp.eastus.azmk8s.io
+#
+# Reachable over the *nonprod* Equinix / Washington DC ExpressRoute circuit (eastus; via the
+# dev-edge VNet). The other dev/stage/prod a1p-*/afi-* clusters share this exact profile — to target
+# one, just swap apiServerHost and re-verify dnsClusterIP is free. (APAC dev is in southeastasia, a
+# different geopolitical region than the eastus circuits — a Standard circuit won't reach it.)
+
+apiServerHost: "a1p-apps-dev-eastus-f974fq43.hcp.eastus.azmk8s.io"
+clusterCidr: "192.168.0.0/16"   # == chart default; stated explicitly. kube-proxy uses it to know the
+                                # flex pod src (172.20.x) is OUTSIDE it -> SNAT to node IP.
+dnsClusterIP: "10.0.0.11"       # VERIFY free in 10.0.0.0/16 on THIS cluster before deploy (kube-dns=.10).
+                                # flex nodes' --cluster-dns; fronts the node-IP-bound CoreDNS.
+
+# FRR relay stays OFF here — the customer has NO Azure Route Server and does not need one (recon
+# YP6M-2839): ExpressRoute private peering exchanges routes with on-prem natively, so the flex node
+# gets node-level reachability for free (node IPs are real VNet IPs, advertised over ER). The
+# relay's job — injecting an AKS pod /24 into the VNet via an RS — has no RS to target here, and the
+# overlay pod CIDR (192.168.0.0/16) isn't advertised over ER regardless. So we inherit the EMPTY
+# asn/routeServer defaults from values.yaml and the system-node pod runs CoreDNS only.
+#
+# Pod-IP reachability across the circuit (mesh/istiod today, or full pod-to-pod later) is instead
+# the job of the WireGuard/Headscale overlay (YP6M-3040), which sidesteps BGP + the Route Server.
+#
+# (Leaving asn/routeServer unset => flex-node-system.frrEnabled is false; no FRR container, no :179
+# Service, no NodeNetworkConfig RBAC.)

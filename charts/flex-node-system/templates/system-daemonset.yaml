@@ -1,13 +1,16 @@
-# The system-node pod: FRR relay + CoreDNS in ONE hostNetwork pod, DaemonSet-pinned to the AKS
-# system VMSS pool. FRR advertises this node's own pod /24 to the Azure Route Server (keeps istiod,
-# a pod IP, reachable from flex nodes); CoreDNS serves cluster DNS bound to the node IP, so flex
-# nodes reach it over the node-to-node VPN (decoupled from the RS). One CoreDNS per system node.
+# The system-node pod: CoreDNS (always) + the FRR relay (only when enabled), in ONE hostNetwork pod,
+# DaemonSet-pinned to the AKS system VMSS pool. CoreDNS serves cluster DNS bound to the node IP, so
+# flex nodes reach it over the node-to-node VPN. When the FRR fiddle bits are set (asn +
+# routeServer.addresses), FRR also advertises this node's own pod /24 to the Azure Route Server
+# (keeps istiod, a pod IP, reachable from flex nodes); with them empty (the default — on-prem /
+# ExpressRoute clusters have no Route Server) the pod is CoreDNS-only. One CoreDNS per system node.
 #
-# Init (both on the cached frr image, so a restart never pulls a throwaway tool image):
-#   discover-podcidr  reads this node's /24 from its NodeNetworkConfig via the apiserver (busybox
-#                     wget + the SA token, verified against the cluster CA); retries until it resolves.
-#   prepare-config    renders /etc/frr/frr.conf and /etc/coredns/Corefile with sed (node IP + the
-#                     discovered /24) and drops the FRR daemon list.
+# Init (on the cached frr image, so a restart never pulls a throwaway tool image):
+#   discover-podcidr  (FRR only) reads this node's /24 from its NodeNetworkConfig via the apiserver
+#                     (busybox wget + the SA token, verified against the cluster CA); retries until ready.
+#   prepare-config    renders /etc/coredns/Corefile (always) and, when FRR is on, /etc/frr/frr.conf
+#                     with sed (node IP + the discovered /24) plus the FRR daemon list.
+{{- $frr := include "flex-node-system.frrEnabled" . }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -46,6 +49,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
+        {{- if $frr }}
         # discover this node's OWN pod /24 -> /work/podcidr, from its Azure NodeNetworkConfig
         # (status.networkContainers[0].primaryIP). Read straight from the apiserver with the frr
         # image's busybox wget + the SA token; busybox wget takes no --ca flag, so append the
@@ -71,8 +75,10 @@ spec:
               echo "discovered pod CIDR $cidr"
           volumeMounts:
             - { name: work, mountPath: /work }
-        # render both configs with sed (no gomplate): __ROUTER_ID__/__HOST_IP__ = the node IP
-        # (downward API), __POD_CIDR__ = the discovered /24. `|` is the sed delimiter (CIDRs have '/').
+        {{- end }}
+        # render the Corefile (always); when FRR is on, also render frr.conf + the daemon list.
+        # sed (no gomplate): __ROUTER_ID__/__HOST_IP__ = the node IP (downward API), __POD_CIDR__ =
+        # the discovered /24. `|` is the sed delimiter (CIDRs have '/').
         - name: prepare-config
           image: "{{ .Values.system.frr.image }}"
           env:
@@ -84,18 +90,25 @@ spec:
             - sh
             - -c
             - |
+              {{- if $frr }}
               cp /config/daemons /etc/frr/daemons
               sed -e "s|__ROUTER_ID__|${HOST_IP}|g" \
                   -e "s|__POD_CIDR__|$(cat /work/podcidr)|g" \
                   /config/speaker.conf.tpl > /etc/frr/frr.conf
+              {{- end }}
               sed -e "s|__HOST_IP__|${HOST_IP}|g" \
                   /config/Corefile.tpl > /etc/coredns/Corefile
           volumeMounts:
             - { name: config, mountPath: /config, readOnly: true }
+            {{- if $frr }}
             - { name: etc-frr, mountPath: /etc/frr }
+            {{- end }}
             - { name: coredns-conf, mountPath: /etc/coredns }
+            {{- if $frr }}
             - { name: work, mountPath: /work }
+            {{- end }}
       containers:
+        {{- if $frr }}
         - name: frr
           image: "{{ .Values.system.frr.image }}"
           securityContext:
@@ -106,6 +119,7 @@ spec:
             - { name: etc-frr, mountPath: /etc/frr }
           resources:
             {{- toYaml .Values.system.frr.resources | nindent 12 }}
+        {{- end }}
         - name: coredns
           image: "{{ .Values.system.coredns.image }}"
           args: ["-conf", "/etc/coredns/Corefile"]
@@ -138,9 +152,11 @@ spec:
         - name: config
           configMap:
             name: {{ .Release.Name }}
-        - name: etc-frr
-          emptyDir: {}
         - name: coredns-conf
+          emptyDir: {}
+        {{- if $frr }}
+        - name: etc-frr
           emptyDir: {}
         - name: work
           emptyDir: {}
+        {{- end }}

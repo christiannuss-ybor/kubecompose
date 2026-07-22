@@ -4,15 +4,20 @@
 # Merges the former charts/bgp (FRR relay) and charts/flex-kube-proxy (kube-proxy + CoreDNS).
 
 # --- Per-cluster knobs (override these per target cluster) ---
-asn: 65001                       # the relay's ASN (eBGP to the Route Server)
-routeServer:
-  asn: 65515                     # Azure Route Server ASN (65515 is Azure's default)
-  addresses:                     # the RS's two virtualRouterIps (per-cluster)
-    - 10.225.255.36
-    - 10.225.255.37
 apiServerHost: ""                # REQUIRED: <cluster>-xxxxxxxx.hcp.<region>.azmk8s.io (kube-proxy dials this by FQDN)
 clusterCidr: 192.168.0.0/16      # AKS pod-CIDR aggregate (kube-proxy; flex pod src is outside it -> SNAT to node IP)
 dnsClusterIP: ""                 # REQUIRED: CoreDNS Service VIP (a free IP in the service CIDR); the flex nodes' --cluster-dns
+
+# --- FRR relay fiddle bits (EMPTY = relay OFF) ---
+# The FRR relay only applies when this cluster has an Azure Route Server to eBGP-peer. Most targets
+# (on-prem / ExpressRoute) have NO Route Server and route natively, so these are empty by default
+# and the system-node pod runs CoreDNS ONLY. Set asn + at least one routeServer.addresses[] to turn
+# the relay on (see values-ybor-playground.yaml); that gates the FRR container, its pod-CIDR
+# discovery, the :179 Service, and the NodeNetworkConfig RBAC in as a unit.
+asn: ""                          # the relay's ASN (eBGP to the Route Server); empty => relay off
+routeServer:
+  asn: ""                        # Azure Route Server ASN (65515 is Azure's default) when present
+  addresses: []                  # the RS's virtualRouterIps (per-cluster); empty => relay off
 
 # (1) The system-node pod: a hostNetwork DaemonSet pinned to the AKS system VMSS pool, running the
 # FRR relay + CoreDNS in ONE pod (two containers). hostNetwork is required by FRR (it peers the

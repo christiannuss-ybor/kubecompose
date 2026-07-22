@@ -3,6 +3,10 @@
 # __ROUTER_ID__ / __HOST_IP__ (both the node IP, from the downward API) and __POD_CIDR__ (the /24
 # discover-podcidr read from NodeNetworkConfig). Placeholders are __UPPERCASE__ so they never
 # collide with helm's Go-template braces.
+#
+# Corefile.tpl is always present; the FRR keys (daemons, speaker.conf.tpl) only render when the FRR
+# relay is enabled (asn + routeServer.addresses set).
+{{- $frr := include "flex-node-system.frrEnabled" . }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -11,6 +15,7 @@ metadata:
   labels:
     app: {{ .Release.Name }}
 data:
+  {{- if $frr }}
   daemons: |
     # FRR daemons to launch. zebra always runs; we only add bgpd.
     bgpd=yes
@@ -68,6 +73,7 @@ data:
      exit-address-family
     !
     line vty
+  {{- end }}
   # CoreDNS: mirrors the managed AKS Corefile minus `import custom/*` (needs AKS's coredns-custom
   # ConfigMap) and the internal.cloudapp.net/reddog NXDOMAIN templates — PLUS `bind __HOST_IP__`.
   # The pod is hostNetwork (FRR needs it), so CoreDNS MUST bind the node IP specifically: a wildcard
