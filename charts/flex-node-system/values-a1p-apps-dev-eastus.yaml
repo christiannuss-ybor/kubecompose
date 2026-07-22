@@ -12,7 +12,8 @@
 # one, just swap apiServerHost and re-verify dnsClusterIP is free. (APAC dev is in southeastasia, a
 # different geopolitical region than the eastus circuits — a Standard circuit won't reach it.)
 
-apiServerHost: "a1p-apps-dev-eastus-f974fq43.hcp.eastus.azmk8s.io"
+# kubeProxy.apiServerHost is omitted — inferred from the SA token aud at pod start (on AKS the token
+# audience carries the apiserver FQDN, = a1p-apps-dev-eastus-f974fq43.hcp.eastus.azmk8s.io here).
 clusterCidr: "192.168.0.0/16"   # == chart default; stated explicitly. kube-proxy uses it to know the
                                 # flex pod src (172.20.x) is OUTSIDE it -> SNAT to node IP.
 dnsClusterIP: "10.0.0.11"       # VERIFY free in 10.0.0.0/16 on THIS cluster before deploy (kube-dns=.10).

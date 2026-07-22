@@ -2,6 +2,11 @@
 # so in-cluster pods on a flex node can reach ClusterIP services. Dials the apiserver by FQDN
 # (public, reachable via the node's default route), NOT the 10.0.0.1 VIP it is about to program.
 # Reuses the cilium ServiceAccount (kubeProxy.serviceAccountName) — no SA/RBAC created here.
+#
+# The apiserver FQDN is not hardcoded: a busybox init (kubeProxy.initImage) renders kubeconfig.conf
+# at pod start, taking the host from kubeProxy.apiServerHost, or — when that's empty — inferring it
+# from the pod's own SA token `aud` claim (AKS puts the apiserver FQDN in the token audience). The
+# kube-proxy image itself is too minimal to decode the token (no base64/sed/cut/tr), hence the init.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -10,15 +15,24 @@ metadata:
   labels:
     app: {{ .Release.Name }}-kube-proxy
 data:
-  # Dial the apiserver by FQDN with the pod's SA token — not the 10.0.0.1 VIP kube-proxy creates.
-  kubeconfig.conf: |
+  # kube-proxy config. Points at the kubeconfig the init renders into the shared emptyDir.
+  config.conf: |
+    apiVersion: kubeproxy.config.k8s.io/v1alpha1
+    kind: KubeProxyConfiguration
+    mode: "iptables"
+    clusterCIDR: "{{ .Values.clusterCidr }}"
+    clientConnection:
+      kubeconfig: /etc/kube-proxy/kubeconfig.conf
+  # kubeconfig TEMPLATE — __APISERVER_HOST__ is filled at pod start by the init (see above). Dials
+  # the apiserver by FQDN with the pod's SA token; no static creds (tokenFile + the projected CA).
+  kubeconfig.conf.tpl: |
     apiVersion: v1
     kind: Config
     clusters:
       - name: default
         cluster:
           certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-          server: https://{{ required "apiServerHost is required" .Values.apiServerHost }}:443
+          server: https://__APISERVER_HOST__:443
     users:
       - name: default
         user:
@@ -30,13 +44,6 @@ data:
           namespace: {{ .Release.Namespace }}
           user: default
     current-context: default
-  config.conf: |
-    apiVersion: kubeproxy.config.k8s.io/v1alpha1
-    kind: KubeProxyConfiguration
-    mode: "iptables"
-    clusterCIDR: "{{ .Values.clusterCidr }}"
-    clientConnection:
-      kubeconfig: /var/lib/kube-proxy/kubeconfig.conf
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -53,6 +60,9 @@ spec:
     metadata:
       labels:
         app: {{ .Release.Name }}-kube-proxy
+      annotations:
+        # roll the DS when the config inputs change (can't include this same file -> would recurse)
+        checksum/config: {{ printf "%s|%s|%s" .Values.clusterCidr .Values.kubeProxy.apiServerHost .Release.Namespace | sha256sum }}
     spec:
       serviceAccountName: {{ required "kubeProxy.serviceAccountName is required" .Values.kubeProxy.serviceAccountName }}
       hostNetwork: true
@@ -65,12 +75,40 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        # Render kubeconfig.conf -> /etc/kube-proxy (shared emptyDir). Host precedence: the explicit
+        # kubeProxy.apiServerHost value, else inferred from the SA token's aud claim. The token is
+        # base64url JWT: take the payload segment, url->std base64 (tr) + pad, decode, and grep the
+        # https://...azmk8s.io audience (skips the OIDC issuer and the double-quoted junk aud entry).
+        - name: render-kubeconfig
+          image: "{{ .Values.kubeProxy.initImage }}"
+          env:
+            - name: OVERRIDE_HOST
+              value: {{ .Values.kubeProxy.apiServerHost | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              host="$OVERRIDE_HOST"
+              if [ -z "$host" ]; then
+                p=$(cut -d. -f2 < /var/run/secrets/kubernetes.io/serviceaccount/token | tr '_-' '/+')
+                case $((${#p} % 4)) in 2) p="$p==";; 3) p="$p=";; esac
+                host=$(printf '%s' "$p" | base64 -d 2>/dev/null | grep -o 'https://[a-zA-Z0-9.-]*\.azmk8s\.io' | head -1 | sed 's#https://##')
+              fi
+              [ -n "$host" ] || { echo "could not determine apiServerHost: no aud match and no kubeProxy.apiServerHost override"; exit 1; }
+              echo "kube-proxy apiserver host: $host"
+              sed "s#__APISERVER_HOST__#${host}#g" /config/kubeconfig.conf.tpl > /etc/kube-proxy/kubeconfig.conf
+              cp /config/config.conf /etc/kube-proxy/config.conf
+          volumeMounts:
+            - { name: config, mountPath: /config, readOnly: true }
+            - { name: kube-proxy-conf, mountPath: /etc/kube-proxy }
       containers:
         - name: kube-proxy
           image: "{{ .Values.kubeProxy.image }}"
           command:
             - /usr/local/bin/kube-proxy
-            - --config=/var/lib/kube-proxy/config.conf
+            - --config=/etc/kube-proxy/config.conf
             - --hostname-override=$(NODE_NAME)
           securityContext:
             privileged: true
@@ -80,7 +118,7 @@ spec:
                 fieldRef:
                   fieldPath: spec.nodeName
           volumeMounts:
-            - { name: config, mountPath: /var/lib/kube-proxy, readOnly: true }
+            - { name: kube-proxy-conf, mountPath: /etc/kube-proxy, readOnly: true }
             - { name: xtables-lock, mountPath: /run/xtables.lock }
             - { name: lib-modules, mountPath: /lib/modules, readOnly: true }
           resources:
@@ -89,6 +127,8 @@ spec:
         - name: config
           configMap:
             name: {{ .Release.Name }}-kube-proxy
+        - name: kube-proxy-conf
+          emptyDir: {}
         - name: xtables-lock
           hostPath:
             path: /run/xtables.lock

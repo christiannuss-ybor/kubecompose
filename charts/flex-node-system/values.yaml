@@ -4,7 +4,6 @@
 # Merges the former charts/bgp (FRR relay) and charts/flex-kube-proxy (kube-proxy + CoreDNS).
 
 # --- Per-cluster knobs (override these per target cluster) ---
-apiServerHost: ""                # REQUIRED: <cluster>-xxxxxxxx.hcp.<region>.azmk8s.io (kube-proxy dials this by FQDN)
 clusterCidr: 192.168.0.0/16      # AKS pod-CIDR aggregate (kube-proxy; flex pod src is outside it -> SNAT to node IP)
 dnsClusterIP: ""                 # REQUIRED: CoreDNS Service VIP (a free IP in the service CIDR); the flex nodes' --cluster-dns
 
@@ -55,6 +54,15 @@ system:
 # single static service CIDR, needs no servicecidr discovery).
 kubeProxy:
   image: registry.k8s.io/kube-proxy:v1.33.8
+  # Tiny busybox for the init that renders kube-proxy's kubeconfig (derives the apiserver host from
+  # the SA token's aud when apiServerHost is empty). The kube-proxy image itself is too minimal
+  # (no base64/sed/cut/tr). gcr.io => public, no auth, no Docker Hub rate limit; ~694 KB. Pinned.
+  initImage: gcr.io/google-containers/busybox:1.27.2
+  # The apiserver FQDN the flex nodes dial (kube-proxy can't use the 10.0.0.1 ClusterIP it programs).
+  # EMPTY STRING => infer it from the SA token's `aud` claim at pod start (on AKS the projected token
+  # audience carries the apiserver FQDN). Set a value only to override (non-AKS, or a custom
+  # --api-audiences that omits the FQDN).
+  apiServerHost: ""
   serviceAccountName: cilium
   nodeSelector:
     kubernetes.azure.com/managed: "false"
