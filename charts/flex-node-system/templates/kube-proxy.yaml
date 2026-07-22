@@ -63,7 +63,7 @@ spec:
         app: {{ .Release.Name }}-kube-proxy
       annotations:
         # roll the DS when the config inputs change (can't include this same file -> would recurse)
-        checksum/config: {{ printf "%s|%s|%s" .Values.clusterCidr .Values.kubeProxy.apiServerHost .Release.Namespace | sha256sum }}
+        checksum/config: {{ printf "%s|%s|%s" $clusterCidr .Values.kubeProxy.apiServerHost .Release.Namespace | sha256sum }}
     spec:
       serviceAccountName: {{ required "kubeProxy.serviceAccountName is required" .Values.kubeProxy.serviceAccountName }}
       hostNetwork: true
