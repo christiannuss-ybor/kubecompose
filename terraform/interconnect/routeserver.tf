@@ -1,15 +1,14 @@
-# Azure Route Server — re-introduced to inject the cluster's per-node pod routes into the VNet
-# so the VPN gateway advertises them to AWS (the forward-path datapath for cross-cloud pod-to-
-# pod). Today the gateway advertises only the VNet address space (10.224.0.0/12), so EC2 reaches
-# AKS nodes but not the pod overlay (192.168.0.0/16). Route Server + branch-to-branch closes it:
+# Azure Route Server — DISABLED 2026-07-22 (YP6M-2839).
 #
-#   relay FRR --eBGP(next-hop unchanged)--> Route Server --(branch-to-branch)--> VPN gateway --> AWS
+# Torn down to bring the ybor-playground stand-in into line with the customer's reality: their
+# on-prem estate is a pervasive 10.0.0.0/8 (the AKS service CIDR 10.0.0.0/16 collides head-on), so
+# the single-stretched-cluster + Route-Server model is dead for them. We're moving to a no-RS world
+# (overlay / multi-cluster mesh) and want to observe the stand-in with the RS out of the datapath.
+# The FRR relay is correspondingly gated OFF in values-ybor-playground.yaml (asn/routeServer unset).
 #
-# INCREMENT 1: the Route Server, its subnet, and PIP only. With branch-to-branch on it peers the
-# VPN gateway automatically, but has no cluster BGP peers yet — so it injects nothing and cannot
-# perturb the working node-to-node path. The relay peering (a small set, NOT every node) comes
-# next. RS ASN is fixed at 65515 (same as the gateway; both are Azure infra).
-
+# Resources preserved below (commented) for easy revert / history. GOTCHA on revert or removal: the
+# VPN gateway needs `az network vnet-gateway reset` (both instances) to reconverge after RS changes.
+/*
 # Route Server requires a dedicated subnet named exactly "RouteServerSubnet", /27 or larger.
 resource "azurerm_subnet" "route_server" {
   name                 = "RouteServerSubnet"
@@ -51,3 +50,4 @@ resource "azurerm_route_server_bgp_connection" "relay" {
   peer_asn        = var.relay_asn
   peer_ip         = var.relay_peer_ip
 }
+*/

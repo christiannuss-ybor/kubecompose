@@ -16,10 +16,11 @@ output "azure_vpn_gateway_public_ip" {
   value       = azurerm_public_ip.vpn_gateway.ip_address
 }
 
-output "route_server_virtual_router_ips" {
-  description = "Route Server's two virtualRouterIps — the addresses the cluster relay will peer over eBGP."
-  value       = azurerm_route_server.this.virtual_router_ips
-}
+# DISABLED 2026-07-22 with the Route Server (routeserver.tf) — no resource to reference.
+# output "route_server_virtual_router_ips" {
+#   description = "Route Server's two virtualRouterIps — the addresses the cluster relay will peer over eBGP."
+#   value       = azurerm_route_server.this.virtual_router_ips
+# }
 
 output "bgp_sessions" {
   description = "BGP peering addresses per tunnel (aws_ip <-> azure_ip)."

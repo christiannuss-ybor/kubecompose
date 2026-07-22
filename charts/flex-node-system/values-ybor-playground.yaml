@@ -1,18 +1,16 @@
-# ybor-playground-dev-westus2 profile — the AWS+VPN stand-in, which DOES have an Azure Route Server.
-# kubeProxy.apiServerHost is omitted on purpose — inferred from the SA token aud
-# (= ybor-playground-dev-westus2-21x49g9f.hcp.westus2.azmk8s.io, verified).
+# ybor-playground-dev-westus2 profile — the AWS+VPN stand-in.
+#
+# RS REMOVED 2026-07-22 (YP6M-2839): the Azure Route Server was torn down in terraform to mirror the
+# customer's no-RS reality, so the FRR relay is OFF here too — asn/routeServer are left unset, which
+# makes flex-node-system.frrEnabled false: the system-node pod runs CoreDNS only, with no BGP :179
+# Service and no NodeNetworkConfig RBAC. (istiod-by-pod-IP reachability from flex pods is the known
+# casualty — that's exactly the no-RS state we want to observe.)
+#
+# kubeProxy.apiServerHost is omitted — inferred from the SA token aud.
 
-# CoreDNS VIP pinned to .11 (brownfield): the flex nodes' --cluster-dns is already 10.0.0.11
-# (terraform dns_service_ip). Dropping this override would DERIVE kube-dns+0 = 10.0.0.100, which
-# would require updating terraform dns_service_ip -> .100 and rebuilding the flex nodes.
+# CoreDNS VIP pinned to 10.0.0.100 — the chart's derived value (kube-dns 10.0.0.10 + "0"), written
+# explicitly here (render-safe). Must equal terraform dns_service_ip; the flex nodes' --cluster-dns
+# is baked to this on rebuild. Moved off the old .11 as part of the no-RS reset.
 system:
   coredns:
-    clusterIP: "10.0.0.11"
-
-# FRR relay ON — this cluster has an Azure Route Server to peer (unlike the on-prem default).
-asn: 65001
-routeServer:
-  asn: 65515                # Azure Route Server ASN (Azure's default)
-  addresses:                # this cluster's RS virtualRouterIps
-    - 10.225.255.36
-    - 10.225.255.37
+    clusterIP: "10.0.0.100"
