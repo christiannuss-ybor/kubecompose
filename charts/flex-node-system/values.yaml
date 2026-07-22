@@ -3,10 +3,6 @@
 #   (2) `kubeProxy.*` — a kube-proxy DaemonSet that runs ON the flex nodes.
 # Merges the former charts/bgp (FRR relay) and charts/flex-kube-proxy (kube-proxy + CoreDNS).
 
-# --- Per-cluster knobs (override these per target cluster) ---
-clusterCidr: 192.168.0.0/16      # AKS pod-CIDR aggregate (kube-proxy; flex pod src is outside it -> SNAT to node IP)
-dnsClusterIP: ""                 # REQUIRED: CoreDNS Service VIP (a free IP in the service CIDR); the flex nodes' --cluster-dns
-
 # --- FRR relay fiddle bits (EMPTY = relay OFF) ---
 # The FRR relay only applies when this cluster has an Azure Route Server to eBGP-peer. Most targets
 # (on-prem / ExpressRoute) have NO Route Server and route natively, so these are empty by default
@@ -43,6 +39,12 @@ system:
   # pinned ClusterIP the flex nodes use as --cluster-dns.
   coredns:
     image: mcr.microsoft.com/oss/v2/kubernetes/coredns:v1.12.1-19   # matches managed AKS CoreDNS
+    # The flex CoreDNS Service VIP (the flex nodes' --cluster-dns). EMPTY STRING => derived at
+    # install/upgrade from the cluster's kube-dns Service ClusterIP by appending "0" (10.0.0.10 ->
+    # 10.0.0.100) — a stable free IP in the service CIDR. Set a value to override (or when rendering
+    # offline: `helm template`/`--dry-run` can't look up kube-dns). NOTE: the flex node's kubelet
+    # --cluster-dns (terraform dns_service_ip) must equal whatever this resolves to.
+    clusterIP: ""
     resources:
       requests: { cpu: 100m, memory: 70Mi }
       limits: { memory: 170Mi }
@@ -63,6 +65,12 @@ kubeProxy:
   # audience carries the apiserver FQDN). Set a value only to override (non-AKS, or a custom
   # --api-audiences that omits the FQDN).
   apiServerHost: ""
+  # AKS pod-CIDR aggregate. kube-proxy masquerades Service traffic whose source is OUTSIDE this, so
+  # flex pods (172.20.x) get SNAT'd to the node IP (their replies must return over the node CIDR).
+  # EMPTY STRING => derived at install/upgrade from a node's NodeNetworkConfig
+  # (status.networkContainers[].subnetAddressSpace, e.g. 192.168.0.0/16); if neither this override
+  # nor the lookup yields a value (e.g. offline render), falls back to 192.168.0.0/16 (the AKS default).
+  clusterCidr: ""
   serviceAccountName: cilium
   nodeSelector:
     kubernetes.azure.com/managed: "false"

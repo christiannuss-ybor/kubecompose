@@ -1,5 +1,7 @@
 # CoreDNS ClusterIP — the flex nodes' --cluster-dns. Selects the system pod; since it's hostNetwork
 # the endpoints are the system node IP(s), so flex nodes reach CoreDNS over the node-to-node VPN.
+# The VIP is system.coredns.clusterIP, or (empty) derived from kube-dns +"0" — see the helper.
+{{- $dnsClusterIP := include "flex-node-system.dnsClusterIP" . }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -10,7 +12,7 @@ metadata:
     k8s-app: {{ .Release.Name }}
 spec:
   type: ClusterIP
-  clusterIP: {{ required "dnsClusterIP is required (a free IP in the service CIDR)" .Values.dnsClusterIP | quote }}
+  clusterIP: {{ required "flex CoreDNS VIP unresolved: set system.coredns.clusterIP, or install/upgrade against a live cluster with a kube-dns Service (offline `helm template`/`--dry-run` can't look it up)" $dnsClusterIP | quote }}
   selector:
     app: {{ .Release.Name }}
   ports:

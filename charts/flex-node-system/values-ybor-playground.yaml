@@ -1,7 +1,13 @@
 # ybor-playground-dev-westus2 profile — the AWS+VPN stand-in, which DOES have an Azure Route Server.
 # kubeProxy.apiServerHost is omitted on purpose — inferred from the SA token aud
 # (= ybor-playground-dev-westus2-21x49g9f.hcp.westus2.azmk8s.io, verified).
-dnsClusterIP: "10.0.0.11"   # free in the service CIDR (verified); flex nodes' --cluster-dns
+
+# CoreDNS VIP pinned to .11 (brownfield): the flex nodes' --cluster-dns is already 10.0.0.11
+# (terraform dns_service_ip). Dropping this override would DERIVE kube-dns+0 = 10.0.0.100, which
+# would require updating terraform dns_service_ip -> .100 and rebuilding the flex nodes.
+system:
+  coredns:
+    clusterIP: "10.0.0.11"
 
 # FRR relay ON — this cluster has an Azure Route Server to peer (unlike the on-prem default).
 asn: 65001

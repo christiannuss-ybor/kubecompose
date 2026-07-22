@@ -7,6 +7,7 @@
 # at pod start, taking the host from kubeProxy.apiServerHost, or — when that's empty — inferring it
 # from the pod's own SA token `aud` claim (AKS puts the apiserver FQDN in the token audience). The
 # kube-proxy image itself is too minimal to decode the token (no base64/sed/cut/tr), hence the init.
+{{- $clusterCidr := include "flex-node-system.clusterCidr" . }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -20,7 +21,7 @@ data:
     apiVersion: kubeproxy.config.k8s.io/v1alpha1
     kind: KubeProxyConfiguration
     mode: "iptables"
-    clusterCIDR: "{{ .Values.clusterCidr }}"
+    clusterCIDR: {{ $clusterCidr | default "192.168.0.0/16" | quote }}
     clientConnection:
       kubeconfig: /etc/kube-proxy/kubeconfig.conf
   # kubeconfig TEMPLATE — __APISERVER_HOST__ is filled at pod start by the init (see above). Dials

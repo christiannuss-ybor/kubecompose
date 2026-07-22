@@ -4,20 +4,22 @@
 #   networkPlugin=azure  mode=overlay  policy=cilium   (IDENTICAL to the ybor-playground stand-in)
 #   podCidr     192.168.0.0/16   -> clusterCidr below (== chart default; no real override needed)
 #   serviceCidr 10.0.0.0/16
-#   kube-dns    10.0.0.10        -> the decoupled CoreDNS takes a DIFFERENT free IP (10.0.0.11)
+#   kube-dns    10.0.0.10        -> the decoupled CoreDNS VIP derives to 10.0.0.100 (kube-dns +"0")
 #   fqdn        a1p-apps-dev-eastus-f974fq43.hcp.eastus.azmk8s.io
 #
 # Reachable over the *nonprod* Equinix / Washington DC ExpressRoute circuit (eastus; via the
-# dev-edge VNet). The other dev/stage/prod a1p-*/afi-* clusters share this exact profile — to target
-# one, just swap apiServerHost and re-verify dnsClusterIP is free. (APAC dev is in southeastasia, a
-# different geopolitical region than the eastus circuits — a Standard circuit won't reach it.)
+# dev-edge VNet). The other dev/stage/prod a1p-*/afi-* clusters share this exact profile and need
+# zero overrides here (apiServerHost + dnsClusterIP both self-derive). (APAC dev is in southeastasia,
+# a different geopolitical region than the eastus circuits — a Standard circuit won't reach it.)
 
-# kubeProxy.apiServerHost is omitted — inferred from the SA token aud at pod start (on AKS the token
-# audience carries the apiserver FQDN, = a1p-apps-dev-eastus-f974fq43.hcp.eastus.azmk8s.io here).
-clusterCidr: "192.168.0.0/16"   # == chart default; stated explicitly. kube-proxy uses it to know the
-                                # flex pod src (172.20.x) is OUTSIDE it -> SNAT to node IP.
-dnsClusterIP: "10.0.0.11"       # VERIFY free in 10.0.0.0/16 on THIS cluster before deploy (kube-dns=.10).
-                                # flex nodes' --cluster-dns; fronts the node-IP-bound CoreDNS.
+# This overlay sets NOTHING per-cluster — all three flex knobs self-derive on AKS:
+#   - kubeProxy.apiServerHost: inferred from the SA token aud (= a1p-apps-dev-eastus-...azmk8s.io).
+#   - system.coredns.clusterIP: derived from kube-dns (10.0.0.10) +"0" = 10.0.0.100.
+#   - kubeProxy.clusterCidr: derived from a NodeNetworkConfig subnetAddressSpace (= 192.168.0.0/16).
+#
+# COUPLING: the flex node's kubelet --cluster-dns must equal the derived CoreDNS VIP (10.0.0.100) —
+# set that in the node bootstrap (the customer's ansible/packer; on the AWS stand-in it's terraform
+# dns_service_ip).
 
 # FRR relay stays OFF here — the customer has NO Azure Route Server and does not need one (recon
 # YP6M-2839): ExpressRoute private peering exchanges routes with on-prem natively, so the flex node
