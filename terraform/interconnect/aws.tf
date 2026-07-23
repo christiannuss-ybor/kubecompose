@@ -32,7 +32,7 @@ resource "aws_ec2_transit_gateway" "this" {
 resource "aws_ec2_transit_gateway_vpc_attachment" "this" {
   transit_gateway_id = aws_ec2_transit_gateway.this.id
   vpc_id             = data.aws_vpc.this.id
-  subnet_ids         = [var.flex_ec2_subnet_id]
+  subnet_ids         = var.flex_ec2_subnet_ids
 
   tags = {
     Name = "${var.name_prefix}-tgw-vpc"

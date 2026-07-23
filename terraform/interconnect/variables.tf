@@ -12,9 +12,9 @@ variable "amazon_side_asn" {
   default     = 64512
 }
 
-variable "flex_ec2_subnet_id" {
-  description = "A VPC subnet for the TGW VPC attachment (the subnet the flex EC2 lives in)."
-  type        = string
+variable "flex_ec2_subnet_ids" {
+  description = "VPC subnets (one per AZ) the flex EC2s occupy — the TGW VPC attachment covers ALL of them so the control plane can reach every flex node's kubelet over the tunnel. A single-AZ attachment silently drops inbound traffic to nodes in other AZs (e.g. the GPU node lands in a different AZ than the t3 node), which breaks kubectl exec/logs (504)."
+  type        = list(string)
 }
 
 # --- Azure ---

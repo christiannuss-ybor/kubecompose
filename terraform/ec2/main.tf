@@ -4,12 +4,6 @@ variable "name_prefix" {
   default     = "aws-azure-vpn"
 }
 
-variable "instance_type" {
-  description = "EC2 instance type. Bumped from t3.micro — the flex node runs kubelet + containerd + nspawn + a full set of AKS DaemonSets and starved at 1 GiB."
-  type        = string
-  default     = "t3.large"
-}
-
 variable "ssh_public_key" {
   description = "SSH public key installed on the instance."
   type        = string
@@ -84,13 +78,12 @@ variable "dns_service_ip" {
   default     = "10.0.0.100"
 }
 
-variable "flex_pod_cidrs" {
-  description = "Per-node pod CIDRs for the flex nodes' bridge CNI (host-local IPAM). One flex EC2 is created per entry (count), each getting its own non-overlapping /25 slice of 172.20.0.0/24."
-  type        = list(string)
-  default = [
-    "172.20.0.0/25",
-    "172.20.0.128/25",
-  ]
+variable "flex_nodes" {
+  description = "The flex EC2 fleet as pod_cidr => { attributes }. One EC2 per entry: the key is that node's bridge-CNI pod /25 (host-local IPAM, a non-overlapping slice of 172.20.0.0/24); the value is a per-node attribute map. Attributes: instance_type; termination_protection (EC2 DisableApiTermination — true blocks terraform from terminating/replacing it until flipped back). GPU-family types (nonzero GPUs, e.g. g7e.2xlarge) automatically get the p6m.dev/node-type=gpu-shared node label and are placed in an AZ that offers the type."
+  type = map(object({
+    instance_type          = string
+    termination_protection = bool
+  }))
 }
 
 variable "afn_version" {
@@ -112,6 +105,45 @@ data "aws_subnets" "default" {
   filter {
     name   = "default-for-az"
     values = ["true"]
+  }
+}
+
+# Per distinct instance type in the fleet: whether it's a GPU type (nonzero .gpus) and which AZs
+# offer it. Not every type is offered in every AZ (g7e is NOT in us-east-1a, where the default
+# subnet[0] lands), so each node lands in a subnet whose AZ offers its type — no hardcoded AZ,
+# self-corrects with AWS.
+data "aws_ec2_instance_type" "flex" {
+  for_each      = local.flex_instance_types
+  instance_type = each.key
+}
+
+data "aws_ec2_instance_type_offerings" "flex" {
+  for_each      = local.flex_instance_types
+  location_type = "availability-zone"
+
+  filter {
+    name   = "instance-type"
+    values = [each.key]
+  }
+}
+
+data "aws_subnets" "flex_az" {
+  for_each = local.flex_instance_types
+
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.this.id]
+  }
+
+  filter {
+    name   = "default-for-az"
+    values = ["true"]
+  }
+
+  # Default subnets only in AZs that actually offer this instance type.
+  filter {
+    name   = "availability-zone"
+    values = data.aws_ec2_instance_type_offerings.flex[each.key].locations
   }
 }
 
@@ -139,13 +171,24 @@ data "azurerm_kubernetes_cluster" "this" {
 locals {
   afn_url = "https://github.com/Azure/AKSFlexNode/releases/download/${var.afn_version}/aks-flex-node-linux-amd64.tar.gz"
 
-  # One cloud-init per pod CIDR in var.flex_pod_cidrs, indexed by count.index. config.json + the
-  # CNI conflist are rendered by jsonencode (proper escaping for the CA cert), base64'd, and
-  # decoded in the cloud-init — no fragile heredoc interpolation. Everything is identical across
-  # nodes except the pod CIDR: its own bridge-CNI range, and the node labels advertising it.
+  # Distinct instance types across the fleet — drives the per-type data-source lookups above.
+  flex_instance_types = toset([for n in values(var.flex_nodes) : n.instance_type])
+  # The fleet as an ordered list (sorted by pod CIDR key) so count.index is stable across plans.
+  flex_node_list = [for cidr in sort(keys(var.flex_nodes)) : {
+    pod_cidr               = cidr
+    instance_type          = var.flex_nodes[cidr].instance_type
+    termination_protection = var.flex_nodes[cidr].termination_protection
+  }]
+
+  # One cloud-init per fleet entry, indexed by count.index (matches aws_instance.this). config.json +
+  # the CNI conflist are rendered by jsonencode (proper escaping for the CA cert), base64'd, and
+  # decoded in the cloud-init — no fragile heredoc interpolation. Nodes differ only by pod CIDR (its
+  # bridge-CNI range + advertised labels) and instance type (the hostname suffix + GPU label).
   cloud_init = [
-    for pod_cidr in var.flex_pod_cidrs : templatefile("${path.module}/cloud-init.sh.tftpl", {
+    for node in local.flex_node_list : templatefile("${path.module}/cloud-init.sh.tftpl", {
       afn_url = local.afn_url
+      # Sanitize the type's dot to a dash for a valid hostname suffix: g7e.2xlarge -> g7e-2xlarge.
+      instance_type_label = replace(node.instance_type, ".", "-")
       config_json_b64 = base64encode(jsonencode({
         azure = {
           subscriptionId          = var.azure_subscription_id
@@ -170,10 +213,14 @@ locals {
           # Publish this node's pod CIDR as labels (kubelet --node-labels at registration) so it's
           # discoverable via kubectl. A label VALUE can't contain '/', so the CIDR is split into
           # network + prefix-length; rejoin with '/' to reconstruct. Same var as the CNI conf below.
-          labels = {
-            "flex.azure.com/pod-network" = split("/", pod_cidr)[0]
-            "flex.azure.com/pod-prefix"  = split("/", pod_cidr)[1]
-          }
+          # GPU-family nodes (the type reports nonzero GPUs) also advertise p6m.dev/node-type=gpu-shared.
+          labels = merge(
+            {
+              "flex.azure.com/pod-network" = split("/", node.pod_cidr)[0]
+              "flex.azure.com/pod-prefix"  = split("/", node.pod_cidr)[1]
+            },
+            length(data.aws_ec2_instance_type.flex[node.instance_type].gpus) > 0 ? { "p6m.dev/node-type" = "gpu-shared" } : {},
+          )
           taints = ["flexnode=true:NoSchedule"]
         }
       }))
@@ -193,7 +240,7 @@ locals {
             hairpinMode = true
             ipam = {
               type   = "host-local"
-              ranges = [[{ subnet = pod_cidr }]]
+              ranges = [[{ subnet = node.pod_cidr }]]
               routes = [{ dst = "0.0.0.0/0" }]
             }
           },
@@ -250,37 +297,20 @@ resource "aws_security_group" "this" {
   }
 }
 
-# Stable EIP per flex node for SSH. There's no reserved ENI anymore — it only existed for the
-# abandoned pod-routing return path plus node-identity, and we accept identity churn now — so the
-# instances use the default subnet's auto-created primary ENI. Their private IPs / node names
-# therefore change on each rebuild; the EIP is the one address that stays put, re-associated to
-# the fresh instance. (Refresh known_hosts after a rebuild: the host key changes regardless.)
-resource "aws_eip" "flex" {
-  count  = length(var.flex_pod_cidrs)
-  domain = "vpc"
-
-  tags = {
-    Name = "${var.name_prefix}-flex-eip-${count.index}"
-  }
-}
-
-resource "aws_eip_association" "flex" {
-  count         = length(var.flex_pod_cidrs)
-  allocation_id = aws_eip.flex[count.index].id
-  instance_id   = aws_instance.this[count.index].id
-}
-
 resource "aws_instance" "this" {
-  count                  = length(var.flex_pod_cidrs)
-  ami                    = data.aws_ami.ubuntu.id
-  instance_type          = var.instance_type
-  key_name               = aws_key_pair.this.key_name
-  subnet_id              = sort(data.aws_subnets.default.ids)[0]
+  count = length(local.flex_node_list)
+  ami   = data.aws_ami.ubuntu.id
+  # Per-node instance type from var.flex_nodes (fleet ordered by pod CIDR). Each node is placed in a
+  # subnet whose AZ offers its type (e.g. g7e is unavailable in us-east-1a).
+  instance_type           = local.flex_node_list[count.index].instance_type
+  disable_api_termination = local.flex_node_list[count.index].termination_protection
+  key_name                = aws_key_pair.this.key_name
+  subnet_id              = sort(data.aws_subnets.flex_az[local.flex_node_list[count.index].instance_type].ids)[0]
   vpc_security_group_ids = [aws_security_group.this.id]
 
-  # Bootstrap the AKS Flex Node via cloud-init; a config change rebuilds the instance. The EIP is
-  # re-associated to the replacement, but the primary ENI is auto-created per instance now, so the
-  # private IP + node name change on each rebuild (leaving a stale NotReady Node to clean up).
+  # Bootstrap the AKS Flex Node via cloud-init; a config change (pod CIDR / type / hostname) rebuilds
+  # the instance. The primary ENI is auto-created per instance, so the private IP + node name change
+  # on each rebuild (leaving a stale NotReady Node to clean up).
   user_data                   = local.cloud_init[count.index]
   user_data_replace_on_change = true
 
@@ -294,31 +324,16 @@ resource "aws_instance" "this" {
   }
 }
 
-# Preserve node 0's EIP + instance addresses from when the module went single-instance -> count[0].
-moved {
-  from = aws_eip.flex
-  to   = aws_eip.flex[0]
-}
-
-moved {
-  from = aws_eip_association.flex
-  to   = aws_eip_association.flex[0]
-}
-
-moved {
-  from = aws_instance.this
-  to   = aws_instance.this[0]
-}
-
 output "public_ips" {
-  value = aws_eip.flex[*].public_ip
+  description = "Auto-assigned (ephemeral) public IPs of the flex instances — EIPs were removed, so these change on each rebuild."
+  value       = aws_instance.this[*].public_ip
 }
 
 output "private_ips" {
   value = aws_instance.this[*].private_ip
 }
 
-output "subnet_id" {
-  description = "Subnet shared by the flex instances — used for the TGW VPC attachment."
-  value       = sort(data.aws_subnets.default.ids)[0]
+output "subnet_ids" {
+  description = "Distinct subnets the flex instances landed in (nodes of different instance types can be in different AZs — e.g. the GPU node). The TGW VPC attachment must cover all of them so the control plane can reach every node's kubelet (exec/logs)."
+  value       = distinct([for i in aws_instance.this : i.subnet_id])
 }

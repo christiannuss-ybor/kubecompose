@@ -21,8 +21,24 @@ mkdir -p /etc/aks-flex-node
 echo '${config_json_b64}' | base64 -d > /etc/aks-flex-node/config.json
 chmod 600 /etc/aks-flex-node/config.json
 
+# Suffix the hostname with the instance type (dot -> dash) so the node is identifiable in
+# `kubectl get nodes` (e.g. the GPU g7e node vs the t3). Set BEFORE the afn join so the kubelet
+# registers under this name (it takes the host hostname; the ip-based prefix still churns per rebuild).
+hostnamectl set-hostname "$(hostname -s)-${instance_type_label}"
+
 # install the systemd unit + bootstrap the nspawn machine "kube1" + TLS-join
 /usr/local/bin/aks-flex-node start --config /etc/aks-flex-node/config.json
+
+# Give the flex-node-system debug sidecar (cnuss/dev `noded`) the host's sshd config: bind the host's
+# /etc/ssh into kube1. RACE: afn OWNS /etc/systemd/nspawn/kube1.nspawn and (re)writes it DURING `start`,
+# so a pre-start write is clobbered. Verified on-node that afn writes it exactly once and never
+# reconciles it — so append our Bind AFTER `start`, then restart the machine so systemd-nspawn re-reads
+# it. Brief kube1/kubelet bounce, harmless at first boot. RW bind exposes host /etc/ssh (incl. host
+# keys) into kube1 — a debug convenience, only meaningful when the chart's debug sidecar runs.
+if [ -f /etc/systemd/nspawn/kube1.nspawn ] && ! grep -qxF 'Bind=/etc/ssh' /etc/systemd/nspawn/kube1.nspawn; then
+  sed -i '/^\[Files\]/a Bind=/etc/ssh' /etc/systemd/nspawn/kube1.nspawn
+  systemctl restart systemd-nspawn@kube1
+fi
 
 # Pre-create containerd's content store inside kube1 so spegel doesn't log a one-time
 # "no such directory" error racing containerd's first init (noise reduction; idempotent).

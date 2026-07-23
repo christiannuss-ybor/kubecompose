@@ -53,9 +53,10 @@ variable "bootstrap_token" {
 module "interconnect" {
   source = "./terraform/interconnect"
 
-  # Wire the flex EC2's subnet from the ec2 module so the TGW attachment follows the
-  # instance across rebuilds.
-  flex_ec2_subnet_id = module.ec2.subnet_id
+  # Wire the flex EC2s' subnets from the ec2 module so the TGW attachment covers every AZ a flex
+  # node lands in (incl. the GPU node's AZ) — otherwise the control plane can't reach that node's
+  # kubelet and exec/logs 504.
+  flex_ec2_subnet_ids = module.ec2.subnet_ids
 }
 
 module "ec2" {
@@ -63,6 +64,14 @@ module "ec2" {
 
   bootstrap_token       = var.bootstrap_token
   azure_subscription_id = var.azure_subscription_id
+
+  # The flex EC2 fleet: pod_cidr => { instance_type }. One node per entry. Defined here (not as a
+  # module default) so the deployment's fleet is explicit at the root. GPU-family types automatically
+  # get the p6m.dev/node-type=gpu-shared label and a GPU-capable AZ.
+  flex_nodes = {
+    "172.20.0.0/25"   = { instance_type = "t3.large", termination_protection = false }
+    "172.20.0.128/25" = { instance_type = "g7e.2xlarge", termination_protection = true }
+  }
 }
 
 output "aws_vpn_connection_id" {
