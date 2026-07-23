@@ -193,6 +193,9 @@ locals {
       afn_url = local.afn_url
       # Sanitize the type's dot to a dash for a valid hostname suffix: g7e.2xlarge -> g7e-2xlarge.
       instance_type_label = replace(node.instance_type, ".", "-")
+      # GPU-family types (nonzero GPUs) run the host-driver + nspawn GPU-passthrough block in
+      # the cloud-init (YP6M-3096). Same detection that drives the p6m.dev/node-type=gpu-shared label.
+      gpu_enabled = length(data.aws_ec2_instance_type.flex[node.instance_type].gpus) > 0
       config_json_b64 = base64encode(jsonencode({
         azure = {
           subscriptionId          = var.azure_subscription_id

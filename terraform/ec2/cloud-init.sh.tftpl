@@ -75,3 +75,86 @@ exit 0
 UDEVADM_SHIM
   chmod 0755 "$KUBE1_BIN/udevadm"
 fi
+
+%{ if gpu_enabled ~}
+# ============================ GPU enablement (YP6M-3096) ============================
+# GPU-family flex node. kube1 (the nspawn machine running kubelet+containerd) does NOT
+# expose /sys/module, so the gpu-operator's CONTAINERIZED driver can't load the kernel
+# module here (it dies at container creation binding the Blackwell GSP firmware path). So
+# we install the NVIDIA driver on the HOST (nspawn shares the host kernel), pass the GPU
+# device nodes into kube1, install matching userspace + the container-toolkit inside kube1,
+# and register the nvidia containerd runtime there. A standalone device-plugin DaemonSet
+# (gpu/nvidia-device-plugin.yaml) then advertises nvidia.com/gpu; set gpu-operator
+# driver.enabled=false for this cluster (see ybor-playground/.platform#149).
+#
+# Codifies the manually-validated YP6M-3096 procedure (RTX PRO 6000 Blackwell, driver 580
+# open module, kernel 6.17-aws). VALIDATE ON A REAL REBUILD:
+#  1. istio-cni: reliable pod scheduling on this node also needs istio-cni OUT of the CNI
+#     chain -- it's injected at runtime by the istio istio-cni-node DaemonSet (NOT this
+#     terraform, whose cni_conf is only bridge+portmap), and a mid-life containerd restart
+#     deadlocks sandboxes. That fix belongs to the istio/network layer, not here.
+#  2. build-at-boot DKMS vs a pre-baked GPU AMI (3096 open question; AMI is faster/safer).
+
+# --- NVIDIA driver on the HOST (open module, required for Blackwell) + persistence ---
+apt-get install -y "linux-headers-$(uname -r)" build-essential dkms
+curl -fsSL -o /tmp/cuda-keyring.deb \
+  https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+dpkg -i /tmp/cuda-keyring.deb
+apt-get update
+apt-get install -y nvidia-driver-580-open nvidia-utils-580 nvidia-persistenced
+modprobe nvidia && modprobe nvidia_uvm
+# persistence keeps the DYNAMIC /dev/nvidia0 + /dev/nvidiactl nodes present for the bind below
+systemctl enable --now nvidia-persistenced || true
+nvidia-smi -pm 1 || true
+
+# --- pass the GPU device nodes into kube1 (same append-after-start pattern as /etc/ssh) ---
+NSPAWN=/etc/systemd/nspawn/kube1.nspawn
+for dev in /dev/nvidia0 /dev/nvidiactl /dev/nvidia-uvm /dev/nvidia-uvm-tools; do
+  [ -e "$dev" ] && ! grep -qxF "Bind=$dev" "$NSPAWN" && sed -i "/^\[Files\]/a Bind=$dev" "$NSPAWN"
+done
+[ -d /dev/nvidia-caps ] && ! grep -qxF 'Bind=/dev/nvidia-caps' "$NSPAWN" \
+  && sed -i '/^\[Files\]/a Bind=/dev/nvidia-caps' "$NSPAWN"
+# nspawn DevicePolicy=closed -> grant the machine cgroup access to the NVIDIA devices
+mkdir -p /etc/systemd/system/systemd-nspawn@kube1.service.d
+cat > /etc/systemd/system/systemd-nspawn@kube1.service.d/10-nvidia.conf <<'NVCG'
+[Service]
+DeviceAllow=/dev/nvidiactl rwm
+DeviceAllow=/dev/nvidia0 rwm
+DeviceAllow=/dev/nvidia-uvm rwm
+DeviceAllow=/dev/nvidia-uvm-tools rwm
+NVCG
+# /dev/nvidia0 + /dev/nvidiactl are DYNAMIC nodes; a bind can miss them on a restart, so a
+# tmpfiles rule inside kube1 recreates them at every boot (cgroup access granted above).
+mkdir -p /var/lib/machines/kube1/etc/tmpfiles.d
+cat > /var/lib/machines/kube1/etc/tmpfiles.d/nvidia-devices.conf <<'NVTMP'
+c /dev/nvidia0   0666 - - - 195:0
+c /dev/nvidiactl 0666 - - - 195:255
+NVTMP
+systemctl daemon-reload
+systemctl restart systemd-nspawn@kube1
+
+# --- userspace + container-toolkit + nvidia containerd runtime INSIDE kube1 ---
+# (userspace MUST match the host module version; the same CUDA repo resolves identically)
+for _ in $(seq 1 30); do
+  [ "$(machinectl show kube1 -p State --value 2>/dev/null)" = "running" ] && break
+  sleep 5
+done
+machinectl shell kube1 /bin/bash -c '
+  set -eux
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update && apt-get install -y curl gpg ca-certificates
+  curl -fsSL -o /tmp/cuda-keyring.deb \
+    https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+  dpkg -i /tmp/cuda-keyring.deb
+  apt-get update && apt-get install -y nvidia-utils-580 libnvidia-compute-580
+  curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+    | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+  curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+    | sed "s#deb https#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https#g" \
+    > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+  apt-get update && apt-get install -y nvidia-container-toolkit
+  nvidia-ctk runtime configure --runtime=containerd --set-as-default=false
+  systemctl restart containerd
+'
+# ===================================================================================
+%{ endif ~}
