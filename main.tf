@@ -69,8 +69,14 @@ module "ec2" {
   # module default) so the deployment's fleet is explicit at the root. GPU-family types automatically
   # get the p6m.dev/node-type=gpu-shared label and a GPU-capable AZ.
   flex_nodes = {
-    "172.20.0.0/25"   = { instance_type = "t3.large", termination_protection = false }
-    "172.20.0.128/25" = { instance_type = "g7e.2xlarge", termination_protection = true }
+    "172.20.0.0/25" = { instance_type = "t3.large", termination_protection = false }
+    "172.20.0.128/25" = {
+      instance_type          = "g7e.2xlarge"
+      termination_protection = true
+      # Lets GPU-workload pods that tolerate nvidia.com/gpu:NoSchedule (operator: Exists) land here.
+      taints       = ["nvidia.com/gpu:NoSchedule"]
+      disk_size_gb = 500
+    }
   }
 }
 

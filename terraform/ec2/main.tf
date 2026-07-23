@@ -79,10 +79,12 @@ variable "dns_service_ip" {
 }
 
 variable "flex_nodes" {
-  description = "The flex EC2 fleet as pod_cidr => { attributes }. One EC2 per entry: the key is that node's bridge-CNI pod /25 (host-local IPAM, a non-overlapping slice of 172.20.0.0/24); the value is a per-node attribute map. Attributes: instance_type; termination_protection (EC2 DisableApiTermination — true blocks terraform from terminating/replacing it until flipped back). GPU-family types (nonzero GPUs, e.g. g7e.2xlarge) automatically get the p6m.dev/node-type=gpu-shared node label and are placed in an AZ that offers the type."
+  description = "The flex EC2 fleet as pod_cidr => { attributes }. One EC2 per entry: the key is that node's bridge-CNI pod /25 (host-local IPAM, a non-overlapping slice of 172.20.0.0/24); the value is a per-node attribute map. Attributes: instance_type; termination_protection (EC2 DisableApiTermination — true blocks terraform from terminating/replacing it until flipped back); taints (EXTRA kubelet --register-with-taints entries, \"key[=value]:effect\", on top of every flex node's baked-in flexnode=true:NoSchedule self-taint); disk_size_gb (root volume size). GPU-family types (nonzero GPUs, e.g. g7e.2xlarge) automatically get the p6m.dev/node-type=gpu-shared node label and are placed in an AZ that offers the type."
   type = map(object({
     instance_type          = string
     termination_protection = bool
+    taints                 = optional(list(string), [])
+    disk_size_gb           = optional(number, 30)
   }))
 }
 
@@ -178,6 +180,8 @@ locals {
     pod_cidr               = cidr
     instance_type          = var.flex_nodes[cidr].instance_type
     termination_protection = var.flex_nodes[cidr].termination_protection
+    taints                 = var.flex_nodes[cidr].taints
+    disk_size_gb           = var.flex_nodes[cidr].disk_size_gb
   }]
 
   # One cloud-init per fleet entry, indexed by count.index (matches aws_instance.this). config.json +
@@ -221,7 +225,9 @@ locals {
             },
             length(data.aws_ec2_instance_type.flex[node.instance_type].gpus) > 0 ? { "p6m.dev/node-type" = "gpu-shared" } : {},
           )
-          taints = ["flexnode=true:NoSchedule"]
+          # Every flex node self-taints flexnode=true:NoSchedule; per-node extras (e.g. the GPU node's
+          # nvidia.com/gpu:NoSchedule) come from var.flex_nodes[*].taints.
+          taints = concat(["flexnode=true:NoSchedule"], node.taints)
         }
       }))
       cni_conf_b64 = base64encode(jsonencode({
@@ -314,9 +320,10 @@ resource "aws_instance" "this" {
   user_data                   = local.cloud_init[count.index]
   user_data_replace_on_change = true
 
-  # AKS Flex Node needs ~8 GiB free in /var/lib for the nspawn rootfs + node artifacts.
+  # AKS Flex Node needs ~8 GiB free in /var/lib for the nspawn rootfs + node artifacts; per-node
+  # override via var.flex_nodes[*].disk_size_gb (e.g. the GPU node's larger container/model storage).
   root_block_device {
-    volume_size = 30
+    volume_size = local.flex_node_list[count.index].disk_size_gb
   }
 
   tags = {
