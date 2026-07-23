@@ -169,6 +169,14 @@ spec:
         - name: headscale
           image: "{{ .Values.system.headscale.image }}"
           args: ["serve"]
+          # postStart: create the bootstrap user right after the server starts (raw exec — the image
+          # is distroless, so it can only run the headscale binary, no shell/guard). CAVEAT: NOT
+          # idempotent — if the user already exists (or the socket isn't up yet) this errors and the
+          # kubelet kills + restarts the container. Spike-only.
+          lifecycle:
+            postStart:
+              exec:
+                command: ["headscale", "users", "create", "flexnode", "--force", "--output", "json"]
           ports:
             - { containerPort: {{ .Values.system.headscale.httpPort }}, name: hs-http, protocol: TCP }
             - { containerPort: {{ .Values.system.headscale.metricsPort }}, name: hs-metrics, protocol: TCP }

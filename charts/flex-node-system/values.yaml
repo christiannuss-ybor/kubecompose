@@ -3,6 +3,10 @@
 #   (2) `kubeProxy.*` — a kube-proxy DaemonSet that runs ON the flex nodes.
 # Merges the former charts/bgp (FRR relay) and charts/flex-kube-proxy (kube-proxy + CoreDNS).
 
+# Debug: when true, adds a cnuss/dev toolbox sidecar (containers[0], sleep infinity) to the flex-node
+# DaemonSet for on-node debugging. Off by default.
+debug: false
+
 # --- FRR relay fiddle bits (EMPTY = relay OFF) ---
 # The FRR relay only applies when this cluster has an Azure Route Server to eBGP-peer. Most targets
 # (on-prem / ExpressRoute) have NO Route Server and route natively, so these are empty by default
@@ -69,6 +73,25 @@ system:
     resources:
       requests: { cpu: 50m, memory: 64Mi }
       limits: { memory: 256Mi }
+    # ITERATION 2 (YP6M-3040): a bootstrap sidecar that mints a REUSABLE pre-auth key and stores it in
+    # a Secret for the tailscale agents (iteration 3) to consume — so no manual key/secret handling.
+    # It's a NATIVE SIDECAR init container (restartPolicy: Always): the headscale CLI needs the server
+    # up and talks over the shared unix socket, so the bootstrapper must be co-located and start after
+    # headscale. Idempotent: ensure the user, mint a key ONLY if the Secret is absent, then idle. The
+    # server image is distroless (no shell/kubectl), so this uses a tools image + fetches the headscale
+    # binary. OFF by default; on in values-ybor-playground.yaml.
+    bootstrap:
+      enabled: false
+      # shell + kubectl + curl + jq. Docker Hub (rate-limit risk) but swappable and it's one pull on
+      # the single system node; the distroless server image can't be reused here.
+      image: alpine/k8s:1.33.7
+      headscaleVersion: "0.29.2"       # release binary to fetch — keep aligned with the image tag above
+      user: flex                       # headscale user the flex/AKS nodes register under
+      secretName: headscale-authkey    # Secret (release namespace) that receives authkey/loginServer/user
+      keyExpiration: "8760h"           # reusable key lifetime (~1y) — spike-length
+      resources:
+        requests: { cpu: 10m, memory: 32Mi }
+        limits: { memory: 128Mi }
 
 # (2) kube-proxy on the flex nodes ONLY (nodeSelector managed=false): programs the service DNAT
 # locally so in-cluster pods on a flex node can reach ClusterIP services. Reuses the cilium

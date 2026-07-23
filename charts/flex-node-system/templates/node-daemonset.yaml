@@ -1,3 +1,7 @@
+# The flex-node DaemonSet (<release>-flex-node) + kube-proxy's ConfigMap. Its workload container is
+# kube-proxy; when the top-level `debug` flag is true, a cnuss/dev toolbox sidecar (sleep infinity)
+# is also added as containers[0] for on-node debugging.
+#
 # kube-proxy on the flex nodes ONLY (nodeSelector managed=false): programs the service DNAT locally
 # so in-cluster pods on a flex node can reach ClusterIP services. Dials the apiserver by FQDN
 # (public, reachable via the node's default route), NOT the 10.0.0.1 VIP it is about to program.
@@ -49,24 +53,32 @@ data:
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ .Release.Name }}-kube-proxy
+  name: {{ .Release.Name }}-flex-node
   namespace: {{ .Release.Namespace }}
   labels:
-    app: {{ .Release.Name }}-kube-proxy
+    app: {{ .Release.Name }}-flex-node
 spec:
   selector:
     matchLabels:
-      app: {{ .Release.Name }}-kube-proxy
+      app: {{ .Release.Name }}-flex-node
   template:
     metadata:
       labels:
-        app: {{ .Release.Name }}-kube-proxy
+        app: {{ .Release.Name }}-flex-node
       annotations:
         # roll the DS when the config inputs change (can't include this same file -> would recurse)
         checksum/config: {{ printf "%s|%s|%s" $clusterCidr .Values.kubeProxy.apiServerHost .Release.Namespace | sha256sum }}
+        {{- if .Values.debug }}
+        # make `kubectl exec/logs/attach` (and k9s's shell) default to the debug toolbox, not kube-proxy
+        kubectl.kubernetes.io/default-container: debug
+        {{- end }}
     spec:
       serviceAccountName: {{ required "kubeProxy.serviceAccountName is required" .Values.kubeProxy.serviceAccountName }}
       hostNetwork: true
+      # Pod-level (applies to the whole pod incl. kube-proxy): host PID + IPC namespaces so the debug
+      # toolbox can see host processes and nsenter into other containers on the node.
+      hostPID: true
+      hostIPC: true
       priorityClassName: system-node-critical
       {{- with .Values.kubeProxy.nodeSelector }}
       nodeSelector:
@@ -105,6 +117,39 @@ spec:
             - { name: config, mountPath: /config, readOnly: true }
             - { name: kube-proxy-conf, mountPath: /etc/kube-proxy }
       containers:
+        {{- if .Values.debug }}
+        # Debug toolbox sidecar (top-level `debug: true`), on the flex node's hostNetwork/hostPID.
+        # PID1 = `noded` (cnuss/dev, resolves cnuss/dev#7): self-provisions short-lived SSH CA trust
+        # into the node's /etc/ssh (the RW hostPath below), then on `kubectl attach`/k9s `a` drops you
+        # onto ubuntu@node over the shared host netns. `s`/exec still lands in this toolbox (nsenter,
+        # tcpdump, ...). Baked NODED_PROVISION=1 + NODED_KEEPALIVE=1: if creds/node aren't ready it
+        # holds the container Running (attachable, logs the reason) instead of crash-looping.
+        # imagePullPolicy Always so :latest is refreshed on every (re)start.
+        # Requires the host's /etc/ssh bound into kube1 — cloud-init appends `Bind=/etc/ssh` to afn's
+        # /etc/systemd/nspawn/kube1.nspawn AFTER `aks-flex-node start` (afn clobbers a pre-start write)
+        # + restarts the machine. Without that bind the hostPath below is kube1's own /etc/ssh -> FailedMount.
+        - name: debug
+          image: cnuss/dev:latest
+          imagePullPolicy: Always
+          command: ["noded"]
+          stdin: true
+          tty: true
+          # Intentionally maxed-out for on-node debugging (debug: true only): full privileges, all
+          # caps, run as root, seccomp unconfined, writable rootfs.
+          securityContext:
+            privileged: true
+            allowPrivilegeEscalation: true
+            runAsUser: 0
+            readOnlyRootFilesystem: false
+            capabilities:
+              add: ["ALL"]
+            seccompProfile:
+              type: Unconfined
+          # The node's /etc/ssh (RW) — via the cloud-init nspawn bind this is the EC2 host's dir, so
+          # noded drops its TrustedUserCAKeys into the host's sshd_config.d/.
+          volumeMounts:
+            - { name: node-etc-ssh, mountPath: /etc/ssh }
+        {{- end }}
         - name: kube-proxy
           image: "{{ .Values.kubeProxy.image }}"
           command:
@@ -137,3 +182,11 @@ spec:
         - name: lib-modules
           hostPath:
             path: /lib/modules
+        {{- if .Values.debug }}
+        # The node's /etc/ssh, RW, for noded's self-provisioned CA trust. Reaches the EC2 host only
+        # because cloud-init binds host /etc/ssh into kube1 (nspawn Bind); type Directory guards it.
+        - name: node-etc-ssh
+          hostPath:
+            path: /etc/ssh
+            type: Directory
+        {{- end }}

@@ -11,6 +11,9 @@
 # CoreDNS VIP pinned to 10.0.0.100 — the chart's derived value (kube-dns 10.0.0.10 + "0"), written
 # explicitly here (render-safe). Must equal terraform dns_service_ip; the flex nodes' --cluster-dns
 # is baked to this on rebuild. Moved off the old .11 as part of the no-RS reset.
+# Debug toolbox sidecar (cnuss/dev) on the flex-node DaemonSet — on-node debugging for the spike.
+debug: true
+
 system:
   coredns:
     clusterIP: "10.0.0.100"
@@ -19,3 +22,7 @@ system:
   # the single-instance sqlite/hostPath model is fine.
   headscale:
     enabled: true
+    # iter 2: bootstrap sidecar mints a reusable key -> Secret headscale-authkey (key currently also
+    # echoed to logs — temporary, for tweaking).
+    bootstrap:
+      enabled: true
