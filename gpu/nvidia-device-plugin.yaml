@@ -1,0 +1,51 @@
+# Standalone NVIDIA k8s device-plugin for the GPU flex node (YP6M-3096).
+#
+# Why standalone (not the gpu-operator's device-plugin): on this cross-cloud flex node the
+# gpu-operator operands run in the istio-ambient `nvidia-operator` namespace and can't start
+# while ztunnel is unhealthy. This plugin runs in `kube-system` (dataplane-mode=none, not
+# meshed) and advertises nvidia.com/gpu against the HOST-installed driver (see
+# terraform/ec2/cloud-init.sh.tftpl GPU block). Retire it once the gpu-operator's own
+# device-plugin can run on the node (post istio/network rework).
+#
+# Requires: host driver + /dev/nvidia* passed into kube1 + the `nvidia` containerd runtime
+# registered in kube1 (all done by the cloud-init GPU block). runtimeClassName=nvidia makes
+# that runtime inject the driver libs + GPU into this pod so it can enumerate via NVML.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-device-plugin-flexnode
+  namespace: kube-system
+  labels:
+    app: nvidia-device-plugin-flexnode
+    managed-by: yp6m-3096
+spec:
+  selector:
+    matchLabels:
+      app: nvidia-device-plugin-flexnode
+  template:
+    metadata:
+      labels:
+        app: nvidia-device-plugin-flexnode
+    spec:
+      priorityClassName: system-node-critical
+      runtimeClassName: nvidia
+      nodeSelector:
+        p6m.dev/node-type: gpu-shared
+      tolerations:
+        - { key: flexnode, operator: Exists, effect: NoSchedule }
+        - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+      containers:
+        - name: nvidia-device-plugin-ctr
+          image: nvcr.io/nvidia/k8s-device-plugin:v0.17.1
+          env:
+            - { name: NVIDIA_VISIBLE_DEVICES, value: "all" }
+            - { name: NVIDIA_DRIVER_CAPABILITIES, value: "all" }
+            - { name: FAIL_ON_INIT_ERROR, value: "true" }
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - { name: device-plugin, mountPath: /var/lib/kubelet/device-plugins }
+      volumes:
+        - name: device-plugin
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
