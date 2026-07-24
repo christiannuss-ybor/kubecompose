@@ -17,15 +17,6 @@ debug: true
 system:
   coredns:
     clusterIP: "10.0.0.100"
-  # YP6M-3040 iteration 1: stand up the Headscale control server on the system node here (the AWS+VPN
-  # stand-in is where we prove the cross-cloud WireGuard overlay). One system node in this cluster, so
-  # the single-instance sqlite/hostPath model is fine.
-  headscale:
-    enabled: true
-    # iter 2: bootstrap sidecar mints a reusable key -> Secret headscale-authkey (key currently also
-    # echoed to logs — temporary, for tweaking).
-    bootstrap:
-      enabled: true
 
 # No gpu override needed: the device plugin (chart default) self-targets GPU flex nodes via its
 # p6m.dev/node-type=gpu-shared nodeSelector, so it activates automatically on the g7e (YP6M-3096).

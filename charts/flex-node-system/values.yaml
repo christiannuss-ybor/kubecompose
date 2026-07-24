@@ -53,46 +53,6 @@ system:
       requests: { cpu: 100m, memory: 70Mi }
       limits: { memory: 170Mi }
 
-  # Headscale — the self-hosted Tailscale control server for the cross-cloud WireGuard overlay
-  # (YP6M-3040). ITERATION 1: run the server as a SIDECAR in the system-node pod (alongside
-  # CoreDNS/FRR). The pod is already hostNetwork, so headscale binds the node IP and rides the
-  # node-to-node VPN — flex nodes can register in a later iteration. Its config is rendered by the
-  # pod's existing prepare-config init (node IP sed'd in). No Service / TLS / pre-auth keys / agents
-  # yet. OFF by default (opt-in per cluster; enabled in values-ybor-playground.yaml). No k8s API
-  # access => default ServiceAccount. SINGLE-INSTANCE: sqlite lives in a per-node hostPath, so >1
-  # system node = N independent servers — coherent only on ONE system node. Fine for the spike.
-  headscale:
-    enabled: false
-    image: ghcr.io/juanfont/headscale:v0.29.2   # ghcr (not Docker Hub) to dodge pull rate limits
-    # HTTP API / registration port. NOT 8080 — CoreDNS's health endpoint already binds :8080 on the
-    # hostNetwork system node, so headscale takes a free node port.
-    httpPort: 8085
-    metricsPort: 9090     # CoreDNS metrics is :9153, so :9090 is free on the node
-    grpcPort: 50443       # remote `headscale` CLI (unused in iteration 1)
-    dataHostPath: /var/lib/headscale   # sqlite DB + noise key persist here, per node
-    resources:
-      requests: { cpu: 50m, memory: 64Mi }
-      limits: { memory: 256Mi }
-    # ITERATION 2 (YP6M-3040): a bootstrap sidecar that mints a REUSABLE pre-auth key and stores it in
-    # a Secret for the tailscale agents (iteration 3) to consume — so no manual key/secret handling.
-    # It's a NATIVE SIDECAR init container (restartPolicy: Always): the headscale CLI needs the server
-    # up and talks over the shared unix socket, so the bootstrapper must be co-located and start after
-    # headscale. Idempotent: ensure the user, mint a key ONLY if the Secret is absent, then idle. The
-    # server image is distroless (no shell/kubectl), so this uses a tools image + fetches the headscale
-    # binary. OFF by default; on in values-ybor-playground.yaml.
-    bootstrap:
-      enabled: false
-      # shell + kubectl + curl + jq. Docker Hub (rate-limit risk) but swappable and it's one pull on
-      # the single system node; the distroless server image can't be reused here.
-      image: alpine/k8s:1.33.7
-      headscaleVersion: "0.29.2"       # release binary to fetch — keep aligned with the image tag above
-      user: flex                       # headscale user the flex/AKS nodes register under
-      secretName: headscale-authkey    # Secret (release namespace) that receives authkey/loginServer/user
-      keyExpiration: "8760h"           # reusable key lifetime (~1y) — spike-length
-      resources:
-        requests: { cpu: 10m, memory: 32Mi }
-        limits: { memory: 128Mi }
-
 # (2) kube-proxy on the flex nodes ONLY (nodeSelector managed=false): programs the service DNAT
 # locally so in-cluster pods on a flex node can reach ClusterIP services. Reuses the cilium
 # ServiceAccount (already has services/endpoints/endpointslices/nodes read) — no new SA/RBAC; it

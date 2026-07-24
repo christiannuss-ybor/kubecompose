@@ -1,7 +1,6 @@
-# The system-node pod: CoreDNS (always) + the FRR relay (when asn/routeServer set) + the Headscale
-# control server (when system.headscale.enabled) — sidecars in ONE hostNetwork pod, DaemonSet-pinned
-# to the AKS system VMSS pool. CoreDNS serves cluster DNS bound to the node IP, so
-# flex nodes reach it over the node-to-node VPN. When the FRR fiddle bits are set (asn +
+# The system-node pod: CoreDNS (always) + the FRR relay (when asn/routeServer set) — sidecars in ONE
+# hostNetwork pod, DaemonSet-pinned to the AKS system VMSS pool. CoreDNS serves cluster DNS bound to
+# the node IP, so flex nodes reach it over the node-to-node VPN. When the FRR fiddle bits are set (asn +
 # routeServer.addresses), FRR also advertises this node's own pod /24 to the Azure Route Server
 # (keeps istiod, a pod IP, reachable from flex nodes); with them empty (the default — on-prem /
 # ExpressRoute clusters have no Route Server) the pod is CoreDNS-only. One CoreDNS per system node.
@@ -10,14 +9,8 @@
 #   discover-podcidr  (FRR only) reads this node's /24 from its NodeNetworkConfig via the apiserver
 #                     (busybox wget + the SA token, verified against the cluster CA); retries until ready.
 #   prepare-config    renders /etc/coredns/Corefile (always); when FRR is on, /etc/frr/frr.conf with
-#                     sed (node IP + the discovered /24) plus the FRR daemon list; when Headscale is
-#                     on, /etc/headscale/config.yaml (node IP sed'd into server_url + listen addrs).
-#
-# SINGLE-INSTANCE CAVEAT (Headscale): this is a DaemonSet, so the sidecar runs on EVERY system node,
-# and its sqlite DB lives in a per-node hostPath — >1 system node = N independent headscale servers.
-# Coherent only on ONE system node (the case on the playground). Revisit if the system pool scales.
+#                     sed (node IP + the discovered /24) plus the FRR daemon list.
 {{- $frr := include "flex-node-system.frrEnabled" . }}
-{{- $hs := .Values.system.headscale.enabled }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -105,19 +98,12 @@ spec:
               {{- end }}
               sed -e "s|__HOST_IP__|${HOST_IP}|g" \
                   /config/Corefile.tpl > /etc/coredns/Corefile
-              {{- if $hs }}
-              sed -e "s|__HOST_IP__|${HOST_IP}|g" \
-                  /config/headscale.yaml.tpl > /etc/headscale/config.yaml
-              {{- end }}
           volumeMounts:
             - { name: config, mountPath: /config, readOnly: true }
             {{- if $frr }}
             - { name: etc-frr, mountPath: /etc/frr }
             {{- end }}
             - { name: coredns-conf, mountPath: /etc/coredns }
-            {{- if $hs }}
-            - { name: headscale-conf, mountPath: /etc/headscale }
-            {{- end }}
             {{- if $frr }}
             - { name: work, mountPath: /work }
             {{- end }}
@@ -162,47 +148,6 @@ spec:
             {{- toYaml .Values.system.coredns.resources | nindent 12 }}
           volumeMounts:
             - { name: coredns-conf, mountPath: /etc/coredns, readOnly: true }
-        {{- if $hs }}
-        # Headscale control server (YP6M-3040). hostNetwork (the pod already is) => binds the node IP,
-        # so flex nodes reach it over the VPN. Port 8085, NOT 8080 (CoreDNS health owns :8080 here).
-        # No k8s API access; readOnlyRootFilesystem + writable mounts mirror the guide's `--read-only`.
-        - name: headscale
-          image: "{{ .Values.system.headscale.image }}"
-          args: ["serve"]
-          # postStart: create the bootstrap user right after the server starts (raw exec — the image
-          # is distroless, so it can only run the headscale binary, no shell/guard). CAVEAT: NOT
-          # idempotent — if the user already exists (or the socket isn't up yet) this errors and the
-          # kubelet kills + restarts the container. Spike-only.
-          lifecycle:
-            postStart:
-              exec:
-                command: ["headscale", "users", "create", "flexnode", "--force", "--output", "json"]
-          ports:
-            - { containerPort: {{ .Values.system.headscale.httpPort }}, name: hs-http, protocol: TCP }
-            - { containerPort: {{ .Values.system.headscale.metricsPort }}, name: hs-metrics, protocol: TCP }
-            - { containerPort: {{ .Values.system.headscale.grpcPort }}, name: hs-grpc, protocol: TCP }
-            - { containerPort: 3478, name: hs-stun, protocol: UDP }   # embedded DERP STUN
-          livenessProbe:
-            httpGet: { path: /health, port: {{ .Values.system.headscale.httpPort }} }
-            initialDelaySeconds: 15
-            periodSeconds: 20
-            failureThreshold: 5
-          readinessProbe:
-            httpGet: { path: /health, port: {{ .Values.system.headscale.httpPort }} }
-            periodSeconds: 15
-            failureThreshold: 3
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          volumeMounts:
-            - { name: headscale-conf, mountPath: /etc/headscale, readOnly: true }
-            - { name: headscale-data, mountPath: /var/lib/headscale }
-            - { name: headscale-run, mountPath: /var/run/headscale }   # unix socket (guide's tmpfs)
-          resources:
-            {{- toYaml .Values.system.headscale.resources | nindent 12 }}
-        {{- end }}
       volumes:
         - name: config
           configMap:
@@ -214,16 +159,4 @@ spec:
           emptyDir: {}
         - name: work
           emptyDir: {}
-        {{- end }}
-        {{- if $hs }}
-        - name: headscale-conf
-          emptyDir: {}
-        - name: headscale-run
-          emptyDir: {}
-        # sqlite DB + noise key persist here, per node. DirectoryOrCreate so the node makes it on
-        # first schedule. (Per-node — see the single-instance caveat in the header.)
-        - name: headscale-data
-          hostPath:
-            path: {{ .Values.system.headscale.dataHostPath }}
-            type: DirectoryOrCreate
         {{- end }}
