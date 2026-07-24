@@ -96,10 +96,6 @@ output "bgp_sessions" {
   value = module.interconnect.bgp_sessions
 }
 
-output "ec2_public_ips" {
-  value = module.ec2.public_ips
-}
-
 output "ec2_private_ips" {
   value = module.ec2.private_ips
 }
