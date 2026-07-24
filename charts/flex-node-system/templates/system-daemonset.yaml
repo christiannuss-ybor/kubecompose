@@ -22,7 +22,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: {{ .Release.Name }}
-  namespace: {{ .Release.Namespace }}
+  namespace: kube-system
   labels:
     app: {{ .Release.Name }}
 spec:

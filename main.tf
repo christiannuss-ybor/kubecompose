@@ -70,13 +70,18 @@ module "ec2" {
   # get the p6m.dev/node-type=gpu-shared label and a GPU-capable AZ.
   flex_nodes = {
     "172.20.0.0/25" = { instance_type = "t3.large", termination_protection = false }
-    "172.20.0.128/25" = {
-      instance_type          = "g7e.2xlarge"
-      termination_protection = true
-      # Lets GPU-workload pods that tolerate nvidia.com/gpu:NoSchedule (operator: Exists) land here.
-      taints       = ["nvidia.com/gpu:NoSchedule"]
-      disk_size_gb = 500
-    }
+    # GPU node PARKED (YP6M-3096): the GPU cloud-init path is validated at the component level on a
+    # real rebuild — driver install, /dev/nvidia* passthrough INTO kube1, and the interleaved single
+    # early nspawn restart all work; the kube1 toolkit runs via systemd-run (machinectl shell was the
+    # wrong tool). Re-enable this entry to resume (device-plugin + nvidia-smi-in-a-pod are the remaining
+    # end-to-end validation). Uncomment to bring the g7e back.
+    # "172.20.0.128/25" = {
+    #   instance_type          = "g7e.2xlarge"
+    #   termination_protection = true
+    #   # Lets GPU-workload pods that tolerate nvidia.com/gpu:NoSchedule (operator: Exists) land here.
+    #   taints       = ["nvidia.com/gpu:NoSchedule"]
+    #   disk_size_gb = 500
+    # }
   }
 }
 

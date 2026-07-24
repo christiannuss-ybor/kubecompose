@@ -193,9 +193,6 @@ locals {
       afn_url = local.afn_url
       # Sanitize the type's dot to a dash for a valid hostname suffix: g7e.2xlarge -> g7e-2xlarge.
       instance_type_label = replace(node.instance_type, ".", "-")
-      # GPU-family types (nonzero GPUs) run the host-driver + nspawn GPU-passthrough block in
-      # the cloud-init (YP6M-3096). Same detection that drives the p6m.dev/node-type=gpu-shared label.
-      gpu_enabled = length(data.aws_ec2_instance_type.flex[node.instance_type].gpus) > 0
       config_json_b64 = base64encode(jsonencode({
         azure = {
           subscriptionId          = var.azure_subscription_id
@@ -320,7 +317,11 @@ resource "aws_instance" "this" {
   # Bootstrap the AKS Flex Node via cloud-init; a config change (pod CIDR / type / hostname) rebuilds
   # the instance. The primary ENI is auto-created per instance, so the private IP + node name change
   # on each rebuild (leaving a stale NotReady Node to clean up).
-  user_data                   = local.cloud_init[count.index]
+  #
+  # gzip+base64: the GPU node's rendered cloud-init exceeds EC2's 16 KiB PLAINTEXT user_data limit, and
+  # cloud-init transparently gunzips compressed user-data. Applied to every node uniformly (the CPU
+  # node is under the limit but this keeps one code path).
+  user_data_base64            = base64gzip(local.cloud_init[count.index])
   user_data_replace_on_change = true
 
   # AKS Flex Node needs ~8 GiB free in /var/lib for the nspawn rootfs + node artifacts; per-node

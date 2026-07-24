@@ -118,8 +118,44 @@ kubeProxy:
   serviceAccountName: cilium
   nodeSelector:
     kubernetes.azure.com/managed: "false"
+  # EXTRA tolerations, appended to the flexnode=true:NoSchedule toleration the flex-node DaemonSet
+  # hardcodes (that taint is on every flex node). kube-proxy must run on EVERY flex node, so this
+  # ALSO tolerates the GPU node's nvidia.com/gpu:NoSchedule taint (terraform flex_nodes[*].taints) —
+  # add any other per-node taints you set in flex_nodes[*].taints here, or kube-proxy won't land there.
   tolerations:
-    - operator: Exists
+    - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 128Mi }
+
+# (3) NVIDIA GPU device plugin (YP6M-3096). Always rendered, but SELF-GATING — no enable flag:
+# nodeSelector is p6m.dev/node-type=gpu-shared (auto-applied by cloud-init to GPU-family flex nodes),
+# so the DaemonSet schedules ZERO pods on clusters/nodes without a GPU flex node and starts one
+# automatically when a GPU node appears. Advertises nvidia.com/gpu against the HOST-installed driver
+# + the `nvidia` containerd runtime that terraform/ec2/cloud-init.sh.tftpl sets up. hostNetwork => it
+# reaches the kubelet over the device-plugins socket and skips the CNI chain (dodging the istio-cni
+# window). Standalone rather than the gpu-operator's plugin because the operator's operands can't run
+# on the flex node while ztunnel/ambient is unhealthy; retire this once they can.
+gpu:
+  image: nvcr.io/nvidia/k8s-device-plugin:v0.17.1
+  # A RuntimeClass maps a pod's runtimeClassName to a containerd runtime "handler". We create our OWN
+  # flex-scoped RuntimeClass OBJECT (`name`) rather than reuse the cluster's existing `nvidia` one, so
+  # we don't collide with its ownership (gpu-operator) OR inherit any scheduling constraints it carries
+  # that could keep flex pods off the flex node. The object name and the handler name are independent:
+  # `handler` still points at the `nvidia` containerd runtime that cloud-init's `nvidia-ctk runtime
+  # configure` registers inside kube1, so no cloud-init change is needed.
+  runtimeClass:
+    create: true
+    name: nvidia-flex   # the RuntimeClass OBJECT pods reference (chart-owned; avoids the cluster's `nvidia`)
+    handler: nvidia     # the containerd runtime handler registered in kube1 (nvidia-ctk default name)
+  # GPU flex nodes only (label auto-applied by cloud-init to GPU-family instance types).
+  nodeSelector:
+    p6m.dev/node-type: gpu-shared
+  # EXTRA tolerations, appended to the flexnode=true:NoSchedule toleration the DaemonSet hardcodes
+  # (that taint is on every flex node). The GPU node ALSO self-taints nvidia.com/gpu:NoSchedule
+  # (terraform flex_nodes[*].taints), so tolerate it here; adjust if that taint ever changes.
+  tolerations:
+    - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }
   resources:
     requests: { cpu: 10m, memory: 32Mi }
     limits: { memory: 128Mi }

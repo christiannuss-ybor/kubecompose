@@ -179,6 +179,8 @@ spec:
       - name: nvidia-device-plugin-ctr
         image: nvcr.io/nvidia/k8s-device-plugin:v0.17.1
         env:
+        - {name: NVIDIA_VISIBLE_DEVICES, value: "all"}
+        - {name: NVIDIA_DRIVER_CAPABILITIES, value: "all"}
         - {name: FAIL_ON_INIT_ERROR, value: "true"}
         securityContext: {privileged: true}
         volumeMounts:
@@ -190,7 +192,7 @@ EOF
 kubectl --context $CTX -n kube-system rollout status ds/nvidia-device-plugin-flexnode --timeout=120s
 kubectl --context $CTX -n kube-system logs ds/nvidia-device-plugin-flexnode | tail -20
 ```
-Manifest used adds `runtimeClassName: nvidia` + `NVIDIA_VISIBLE_DEVICES=all` + `NVIDIA_DRIVER_CAPABILITIES=all` + `privileged` (the nvidia runtime from B6 injects the driver/GPU into the plugin).
+Manifest used adds `runtimeClassName: nvidia` + `NVIDIA_VISIBLE_DEVICES=all` + `NVIDIA_DRIVER_CAPABILITIES=all` + `privileged` (the nvidia runtime from B6 injects the driver/GPU into the plugin). **This is now codified in `charts/flex-node-system` (always rendered, self-targeting GPU nodes — no enable flag), not a hand-applied file** — the chart renders the device-plugin DaemonSet with `hostNetwork: true` (skips the CNI chain, so it's not gated by the istio-cni window below), scoped to GPU flex nodes via `nodeSelector: p6m.dev/node-type=gpu-shared`. It also creates its own chart-owned `RuntimeClass/nvidia-flex` (handler `nvidia`) — a flex-scoped object distinct from the cluster's existing `nvidia` RuntimeClass, so pods here don't inherit any scheduling constraints the shared one carries and there's no Helm ownership clash (`gpu.runtimeClass.{create,name,handler}`). The inline heredoc above is kept only as the record of what was applied by hand during the spike.
 **Outcome (2026-07-23): ✅ `nvidia.com/gpu` CAP=1, ALLOC=1** on the g7e; device-plugin `1/1 Running`; logs: "Registered device plugin for 'nvidia.com/gpu' with Kubelet". **3096 core criterion (node advertises nvidia.com/gpu) MET.**
 
 ### ⚠ BLOCKER hit during Part C — istio-cni in the flex-node CNI chain

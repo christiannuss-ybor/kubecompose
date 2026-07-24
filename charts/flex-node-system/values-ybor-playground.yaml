@@ -26,3 +26,6 @@ system:
     # echoed to logs — temporary, for tweaking).
     bootstrap:
       enabled: true
+
+# No gpu override needed: the device plugin (chart default) self-targets GPU flex nodes via its
+# p6m.dev/node-type=gpu-shared nodeSelector, so it activates automatically on the g7e (YP6M-3096).

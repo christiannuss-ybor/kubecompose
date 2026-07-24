@@ -2,12 +2,53 @@
 # AKS Flex Node bootstrap. Downloads the release binary, writes the config (rendered by
 # terraform jsonencode + base64, decoded here — no fragile heredoc escaping), joins the
 # cluster, then drops a DIY bridge CNI (managed cilium can't serve flex nodes).
+#
+# GPU (YP6M-3096) is INTERLEAVED, not a trailing block: the host NVIDIA driver installs up-front
+# (unconditional — a non-GPU node just carries unused packages), the driver is ACTIVATED only if a
+# GPU is actually present (lspci self-detect, no gpu_enabled flag), and the GPU device passthrough is
+# folded into the SAME kube1.nspawn edit + the SAME single early machine restart as the /etc/ssh bind.
+# Doing that one restart BEFORE kubelet pods land is deliberate: a late second restart of a busy
+# machine races the cgroup release ("payload subcgroup: Device or resource busy" -> half-registered ->
+# "Machine 'kube1' already exists" -> wedged). One early restart avoids the race entirely.
 set -euxo pipefail
 exec > /var/log/flex-bootstrap.log 2>&1
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y systemd-container
+apt-get install -y systemd-container pciutils
+
+# ===== GPU: install the HOST NVIDIA driver + userspace up-front (YP6M-3096) =====
+# Unconditional (harmless on a non-GPU node). Derive the CUDA repo from the RUNNING OS + arch rather
+# than hardcoding ubuntu2404/x86_64 (the AMI's Ubuntu can move; an arm64 GPU family needs sbsa). The
+# open module is required for Blackwell. Capture the resolved version so kube1's userspace (far below)
+# pins to the EXACT host module version -> no NVML "Driver/library version mismatch".
+. /etc/os-release
+case "$(uname -m)" in
+  x86_64)  CUDA_ARCH=x86_64 ;;
+  aarch64) CUDA_ARCH=sbsa ;;
+  *) echo "unsupported arch for the NVIDIA CUDA repo: $(uname -m)" >&2; exit 1 ;;
+esac
+CUDA_REPO="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu$${VERSION_ID//./}/$CUDA_ARCH"
+apt-get install -y "linux-headers-$(uname -r)" build-essential dkms
+curl -fsSL -o /tmp/cuda-keyring.deb "$CUDA_REPO/cuda-keyring_1.1-1_all.deb"
+dpkg -i /tmp/cuda-keyring.deb
+apt-get update
+apt-get install -y nvidia-driver-580-open nvidia-utils-580 nvidia-persistenced
+NVIDIA_VER="$(dpkg-query -W -f='$${Version}' nvidia-utils-580)"
+
+# ===== GPU: ACTIVATE the driver on the host, only if a GPU is actually present (self-detect) =====
+# Done BEFORE `aks-flex-node start` so /dev/nvidia* exist and persistence is on in time to fold the
+# device binds into the single early kube1 restart below.
+GPU_PRESENT=0
+if lspci | grep -qi nvidia; then
+  GPU_PRESENT=1
+  modprobe nvidia && modprobe nvidia_uvm
+  # persistence keeps the DYNAMIC /dev/nvidia0 + /dev/nvidiactl nodes present for the bind below
+  systemctl enable --now nvidia-persistenced || true
+  nvidia-smi -pm 1 || true
+  # HOST success gate (RUNBOOK Part A A5): fail the boot loudly rather than ship a silently GPU-less node.
+  nvidia-smi
+fi
 
 # aks-flex-node release binary (github releases, not built from source). The tarball holds a
 # single binary named aks-flex-node-linux-amd64; rename it to aks-flex-node.
@@ -29,15 +70,65 @@ hostnamectl set-hostname "$(hostname -s)-${instance_type_label}"
 # install the systemd unit + bootstrap the nspawn machine "kube1" + TLS-join
 /usr/local/bin/aks-flex-node start --config /etc/aks-flex-node/config.json
 
-# Give the flex-node-system debug sidecar (cnuss/dev `noded`) the host's sshd config: bind the host's
-# /etc/ssh into kube1. RACE: afn OWNS /etc/systemd/nspawn/kube1.nspawn and (re)writes it DURING `start`,
-# so a pre-start write is clobbered. Verified on-node that afn writes it exactly once and never
-# reconciles it — so append our Bind AFTER `start`, then restart the machine so systemd-nspawn re-reads
-# it. Brief kube1/kubelet bounce, harmless at first boot. RW bind exposes host /etc/ssh (incl. host
-# keys) into kube1 — a debug convenience, only meaningful when the chart's debug sidecar runs.
-if [ -f /etc/systemd/nspawn/kube1.nspawn ] && ! grep -qxF 'Bind=/etc/ssh' /etc/systemd/nspawn/kube1.nspawn; then
-  sed -i '/^\[Files\]/a Bind=/etc/ssh' /etc/systemd/nspawn/kube1.nspawn
-  systemctl restart systemd-nspawn@kube1
+# ===== kube1.nspawn: append the /etc/ssh bind AND (if a GPU is present) the NVIDIA device passthrough,
+# then do ONE early machine restart. =====
+# afn OWNS /etc/systemd/nspawn/kube1.nspawn and (re)writes it DURING `start`, so a pre-start write is
+# clobbered -- append AFTER `start`. The /etc/ssh RW bind exposes host /etc/ssh (incl. host keys) into
+# kube1 for the chart's debug sidecar. Folding the GPU binds into the SAME single restart, done NOW
+# (before kubelet pods land), is what avoids the busy-machine restart race (see header).
+NSPAWN=/etc/systemd/nspawn/kube1.nspawn
+if [ -f "$NSPAWN" ]; then
+  grep -qxF 'Bind=/etc/ssh' "$NSPAWN" || sed -i '/^\[Files\]/a Bind=/etc/ssh' "$NSPAWN"
+
+  if [ "$GPU_PRESENT" = 1 ]; then
+    # Bind the device nodes -- numbered render nodes enumerated so a MULTI-GPU instance passes all of
+    # them; nvidiactl/uvm/uvm-tools are fixed singletons. (|| true: an empty glob must not trip set -e.)
+    GPU_DEVS="$(ls /dev/nvidia[0-9]* 2>/dev/null || true) /dev/nvidiactl /dev/nvidia-uvm /dev/nvidia-uvm-tools"
+    for dev in $GPU_DEVS; do
+      [ -e "$dev" ] && ! grep -qxF "Bind=$dev" "$NSPAWN" && sed -i "/^\[Files\]/a Bind=$dev" "$NSPAWN"
+    done
+    [ -d /dev/nvidia-caps ] && ! grep -qxF 'Bind=/dev/nvidia-caps' "$NSPAWN" \
+      && sed -i '/^\[Files\]/a Bind=/dev/nvidia-caps' "$NSPAWN"
+
+    # nspawn DevicePolicy=closed -> grant the machine cgroup access to every device we bound (generated,
+    # so it tracks all GPUs + the caps major, instead of a hardcoded single-GPU list).
+    mkdir -p /etc/systemd/system/systemd-nspawn@kube1.service.d
+    {
+      echo '[Service]'
+      for dev in $GPU_DEVS; do
+        [ -e "$dev" ] && echo "DeviceAllow=$dev rwm"
+      done
+      # /dev/nvidia-caps/* share a dynamically-assigned major; grant the whole major by name if present.
+      grep -qw nvidia-caps /proc/devices && echo 'DeviceAllow=char-nvidia-caps rwm'
+    } > /etc/systemd/system/systemd-nspawn@kube1.service.d/10-nvidia.conf
+
+    # /dev/nvidia0..N + /dev/nvidiactl are DYNAMIC nodes; a bind can miss them on a restart, so a
+    # tmpfiles rule inside kube1 recreates them at every boot. Derive the char major from /proc/devices
+    # (dynamically assigned, not always 195); one line per GPU (minor == index; nvidiactl == 255).
+    NV_MAJOR="$(awk '$2=="nvidia-frontend"||$2=="nvidia"{print $1}' /proc/devices | head -1)"
+    mkdir -p /var/lib/machines/kube1/etc/tmpfiles.d
+    {
+      for dev in $(ls /dev/nvidia[0-9]* 2>/dev/null || true); do
+        echo "c $dev 0666 - - - $NV_MAJOR:$${dev#/dev/nvidia}"
+      done
+      echo "c /dev/nvidiactl 0666 - - - $NV_MAJOR:255"
+    } > /var/lib/machines/kube1/etc/tmpfiles.d/nvidia-devices.conf
+  fi
+
+  # Apply the .nspawn + drop-in with ONE restart. NOT `systemctl restart`: stop->immediate start can
+  # race the cgroup release, so stop, WAIT for machined to fully deregister, clear any failed state,
+  # then start (retry to ride out a lingering registration).
+  systemctl daemon-reload
+  systemctl stop systemd-nspawn@kube1 || true
+  for _ in $(seq 1 60); do machinectl show kube1 >/dev/null 2>&1 || break; sleep 2; done
+  systemctl reset-failed systemd-nspawn@kube1 2>/dev/null || true
+  for _ in $(seq 1 10); do
+    systemctl start systemd-nspawn@kube1 && break
+    systemctl reset-failed systemd-nspawn@kube1 2>/dev/null || true
+    sleep 5
+  done
+  [ "$(machinectl show kube1 -p State --value 2>/dev/null)" = "running" ] \
+    || { echo "kube1 did not come back after the nspawn bind update" >&2; exit 1; }
 fi
 
 # Pre-create containerd's content store inside kube1 so spegel doesn't log a one-time
@@ -76,85 +167,48 @@ UDEVADM_SHIM
   chmod 0755 "$KUBE1_BIN/udevadm"
 fi
 
-%{ if gpu_enabled ~}
-# ============================ GPU enablement (YP6M-3096) ============================
-# GPU-family flex node. kube1 (the nspawn machine running kubelet+containerd) does NOT
-# expose /sys/module, so the gpu-operator's CONTAINERIZED driver can't load the kernel
-# module here (it dies at container creation binding the Blackwell GSP firmware path). So
-# we install the NVIDIA driver on the HOST (nspawn shares the host kernel), pass the GPU
-# device nodes into kube1, install matching userspace + the container-toolkit inside kube1,
-# and register the nvidia containerd runtime there. A standalone device-plugin DaemonSet
-# (gpu/nvidia-device-plugin.yaml) then advertises nvidia.com/gpu; set gpu-operator
-# driver.enabled=false for this cluster (see ybor-playground/.platform#149).
-#
-# Codifies the manually-validated YP6M-3096 procedure (RTX PRO 6000 Blackwell, driver 580
-# open module, kernel 6.17-aws). VALIDATE ON A REAL REBUILD:
-#  1. istio-cni: reliable pod scheduling on this node also needs istio-cni OUT of the CNI
-#     chain -- it's injected at runtime by the istio istio-cni-node DaemonSet (NOT this
-#     terraform, whose cni_conf is only bridge+portmap), and a mid-life containerd restart
-#     deadlocks sandboxes. That fix belongs to the istio/network layer, not here.
-#  2. build-at-boot DKMS vs a pre-baked GPU AMI (3096 open question; AMI is faster/safer).
-
-# --- NVIDIA driver on the HOST (open module, required for Blackwell) + persistence ---
-apt-get install -y "linux-headers-$(uname -r)" build-essential dkms
-curl -fsSL -o /tmp/cuda-keyring.deb \
-  https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-dpkg -i /tmp/cuda-keyring.deb
-apt-get update
-apt-get install -y nvidia-driver-580-open nvidia-utils-580 nvidia-persistenced
-modprobe nvidia && modprobe nvidia_uvm
-# persistence keeps the DYNAMIC /dev/nvidia0 + /dev/nvidiactl nodes present for the bind below
-systemctl enable --now nvidia-persistenced || true
-nvidia-smi -pm 1 || true
-
-# --- pass the GPU device nodes into kube1 (same append-after-start pattern as /etc/ssh) ---
-NSPAWN=/etc/systemd/nspawn/kube1.nspawn
-for dev in /dev/nvidia0 /dev/nvidiactl /dev/nvidia-uvm /dev/nvidia-uvm-tools; do
-  [ -e "$dev" ] && ! grep -qxF "Bind=$dev" "$NSPAWN" && sed -i "/^\[Files\]/a Bind=$dev" "$NSPAWN"
-done
-[ -d /dev/nvidia-caps ] && ! grep -qxF 'Bind=/dev/nvidia-caps' "$NSPAWN" \
-  && sed -i '/^\[Files\]/a Bind=/dev/nvidia-caps' "$NSPAWN"
-# nspawn DevicePolicy=closed -> grant the machine cgroup access to the NVIDIA devices
-mkdir -p /etc/systemd/system/systemd-nspawn@kube1.service.d
-cat > /etc/systemd/system/systemd-nspawn@kube1.service.d/10-nvidia.conf <<'NVCG'
-[Service]
-DeviceAllow=/dev/nvidiactl rwm
-DeviceAllow=/dev/nvidia0 rwm
-DeviceAllow=/dev/nvidia-uvm rwm
-DeviceAllow=/dev/nvidia-uvm-tools rwm
-NVCG
-# /dev/nvidia0 + /dev/nvidiactl are DYNAMIC nodes; a bind can miss them on a restart, so a
-# tmpfiles rule inside kube1 recreates them at every boot (cgroup access granted above).
-mkdir -p /var/lib/machines/kube1/etc/tmpfiles.d
-cat > /var/lib/machines/kube1/etc/tmpfiles.d/nvidia-devices.conf <<'NVTMP'
-c /dev/nvidia0   0666 - - - 195:0
-c /dev/nvidiactl 0666 - - - 195:255
-NVTMP
-systemctl daemon-reload
-systemctl restart systemd-nspawn@kube1
-
-# --- userspace + container-toolkit + nvidia containerd runtime INSIDE kube1 ---
-# (userspace MUST match the host module version; the same CUDA repo resolves identically)
-for _ in $(seq 1 30); do
-  [ "$(machinectl show kube1 -p State --value 2>/dev/null)" = "running" ] && break
-  sleep 5
-done
-machinectl shell kube1 /bin/bash -c '
-  set -eux
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update && apt-get install -y curl gpg ca-certificates
-  curl -fsSL -o /tmp/cuda-keyring.deb \
-    https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-  dpkg -i /tmp/cuda-keyring.deb
-  apt-get update && apt-get install -y nvidia-utils-580 libnvidia-compute-580
-  curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
-    | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-  curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
-    | sed "s#deb https#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https#g" \
-    > /etc/apt/sources.list.d/nvidia-container-toolkit.list
-  apt-get update && apt-get install -y nvidia-container-toolkit
-  nvidia-ctk runtime configure --runtime=containerd --set-as-default=false
-  systemctl restart containerd
-'
-# ===================================================================================
-%{ endif ~}
+# ===== GPU: userspace + container-toolkit + nvidia containerd runtime INSIDE kube1 (if GPU present) =====
+# kube1 is already up (from the restart above). Userspace is PINNED to $NVIDIA_VER so NVML matches the
+# host module. Use `systemd-run --machine --pipe --wait` (NOT `machinectl shell`, which allocates an
+# interactive PTY -> from cloud-init it neither runs a scripted -c reliably nor propagates the exit
+# code): systemd-run runs non-interactively, pipes the inner output into this log, and propagates the
+# inner exit code so a failed step fails the boot under set -e. The sentinel below is a second check.
+# (istio-cni note: reliable POD scheduling on this node also needs istio-cni out of the CNI chain;
+# that's the istio/network layer, not here.)
+if [ "$GPU_PRESENT" = 1 ]; then
+  # Wait for kube1's OWN systemd + system bus to finish booting: running a command in the machine needs
+  # the container's dbus, which comes up a bit AFTER the machine registers as "running". Probe until it
+  # connects (systemd-run fails to reach the machine bus until then).
+  for _ in $(seq 1 60); do
+    systemd-run --machine=kube1 --quiet --pipe --wait /bin/true >/dev/null 2>&1 && break
+    sleep 5
+  done
+  systemd-run --machine=kube1 --quiet --pipe --wait --collect /bin/bash -c '
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y curl gpg ca-certificates
+    # derive the CUDA repo from kube1s OWN os-release + arch (dont assume ubuntu2404/x86_64)
+    . /etc/os-release
+    case "$(uname -m)" in x86_64) CUDA_ARCH=x86_64;; aarch64) CUDA_ARCH=sbsa;; *) echo "unsupported arch $(uname -m)"; exit 1;; esac
+    CUDA_REPO="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu$${VERSION_ID//./}/$CUDA_ARCH"
+    curl -fsSL -o /tmp/cuda-keyring.deb "$CUDA_REPO/cuda-keyring_1.1-1_all.deb"
+    dpkg -i /tmp/cuda-keyring.deb
+    apt-get update
+    # pin to the exact host module version; fall back to the 580 branch only if that deb rev is absent
+    apt-get install -y nvidia-utils-580='"$NVIDIA_VER"' libnvidia-compute-580='"$NVIDIA_VER"' \
+      || apt-get install -y nvidia-utils-580 libnvidia-compute-580
+    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+      | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+    curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+      | sed "s#deb https#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https#g" \
+      > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+    apt-get update && apt-get install -y nvidia-container-toolkit
+    # NVML gate INSIDE kube1: proves the pinned userspace matches the host module (no version skew).
+    nvidia-smi
+    nvidia-ctk runtime configure --runtime=containerd --set-as-default=false
+    systemctl restart containerd
+    touch /var/lib/gpu-provisioned   # sentinel (see note above)
+  '
+  # Assert the sentinel -- fails the boot if any step inside kube1 aborted (machinectl swallows it).
+  test -e /var/lib/machines/kube1/var/lib/gpu-provisioned
+fi
